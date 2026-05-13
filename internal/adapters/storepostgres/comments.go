@@ -2,9 +2,11 @@ package storepostgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
@@ -91,6 +93,30 @@ WHERE comment_id = $3
 		return fmt.Errorf("comment %s not found", id)
 	}
 	return nil
+}
+
+// GetByGithubId looks up a comment by its VCS-side external id.
+func (s *CommentStore) GetByGithubId(ctx context.Context, githubId int64) (store.Comment, bool, error) {
+	var c store.Comment
+	var tenant, repo string
+	var gid *int64
+	err := s.pool.QueryRow(ctx, `
+SELECT comment_id, tenant_id, repo_id, pr_number, source, github_id,
+       COALESCE(file_path,''), COALESCE(start_line,0), COALESCE(end_line,0),
+       comment_text, COALESCE(category,''), COALESCE(outcome,'pending'), created_at
+FROM review_comments WHERE github_id = $1
+`, githubId).Scan(&c.CommentId, &tenant, &repo, &c.PrNumber, &c.Source, &gid,
+		&c.FilePath, &c.StartLine, &c.EndLine, &c.CommentText, &c.Category, &c.Outcome, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Comment{}, false, nil
+	}
+	if err != nil {
+		return store.Comment{}, false, fmt.Errorf("get by github id: %w", err)
+	}
+	c.TenantId = ports.TenantId(tenant)
+	c.RepoId = ports.RepoId(repo)
+	c.GithubId = gid
+	return c, true, nil
 }
 
 // ListByPr returns all comments for a PR.

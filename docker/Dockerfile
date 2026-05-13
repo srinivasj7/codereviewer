@@ -20,7 +20,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /app/binary ./cmd/${CMD}
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app
+# git is required by the rules-sync binary (clones the rules repo via the
+# git CLI). It's cheap (~5MB) and useful for diagnostics in any image,
+# so we install it unconditionally rather than maintain two runtime stages.
+RUN apk add --no-cache ca-certificates tzdata git && adduser -D -u 10001 app
 COPY --from=builder /app/binary /app/binary
 USER app
 ENTRYPOINT ["/app/binary"]

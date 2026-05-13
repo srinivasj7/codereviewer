@@ -63,12 +63,18 @@ type PushPayload struct {
 	HeadSha   string
 }
 
-// ReviewCommentPayload is fired for PR-level comments (including slash commands).
+// ReviewCommentPayload is fired for PR-level comments (including slash
+// commands). CommentId is the upstream comment's own id; InReplyToId is
+// the parent comment's id when this is a reply, zero otherwise — the
+// feedback pipeline uses InReplyToId to attribute replies to a prior
+// bot comment.
 type ReviewCommentPayload struct {
-	Ref      PrRef
-	AuthorId string
-	Body     string
-	IsBot    bool
+	Ref         PrRef
+	CommentId   int64
+	AuthorId    string
+	Body        string
+	IsBot       bool
+	InReplyToId int64
 }
 
 // ReactionPayload is fired when reactions are added to comments.

@@ -45,7 +45,6 @@ func run(cfgPath string) error {
 		return err
 	}
 
-	obs := boot.PickObservability(cfg.Observability)
 	secrets, err := boot.PickSecrets(cfg.Secrets)
 	if err != nil {
 		return fmt.Errorf("secrets: %w", err)
@@ -53,6 +52,9 @@ func run(cfgPath string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
+	defer flushObs(shutdownObs)
 
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
@@ -106,6 +108,14 @@ func run(cfgPath string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// flushObs gives the OTel exporters a small window to drain. Errors are
+// dropped — at shutdown time there's no actionable handler.
+func flushObs(shutdown func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }
 
 type gateway struct {
@@ -166,8 +176,7 @@ func (g *gateway) route(ctx context.Context, event ports.WebhookEvent) error {
 	case ports.WebhookKindReviewComment:
 		return g.routeReviewComment(ctx, event.ReviewComment)
 	case ports.WebhookKindReaction:
-		// Feedback signals; slice 4.
-		return nil
+		return g.routeReaction(ctx, event.Reaction)
 	}
 	return nil
 }
@@ -244,7 +253,34 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 			"command", cmd, "pr_number", p.Ref.PrNumber)
 		return nil
 	}
+	// Not a slash command. If this comment is a reply under another
+	// comment, treat it as a feedback signal — the worker will look up
+	// the parent by InReplyToId and only act if the parent is a bot
+	// comment we own.
+	if p.InReplyToId != 0 {
+		return schemas.PublishFeedbackJob(ctx, g.bus, schemas.FeedbackJob{
+			TenantId:          g.tenantId,
+			RepoId:            p.Ref.RepoId,
+			Kind:              "reply",
+			CommentExternalId: p.InReplyToId,
+			AuthorId:          p.AuthorId,
+		})
+	}
 	return nil
+}
+
+func (g *gateway) routeReaction(ctx context.Context, p *ports.ReactionPayload) error {
+	if p == nil || p.CommentExternalId == 0 {
+		return nil
+	}
+	return schemas.PublishFeedbackJob(ctx, g.bus, schemas.FeedbackJob{
+		TenantId:          g.tenantId,
+		RepoId:            "", // unknown at reaction event time; worker uses CommentExternalId
+		Kind:              "reaction",
+		CommentExternalId: p.CommentExternalId,
+		Reaction:          p.Reaction,
+		AuthorId:          p.UserId,
+	})
 }
 
 func (g *gateway) ensureRepo(ctx context.Context, repo ports.RepoRef) error {

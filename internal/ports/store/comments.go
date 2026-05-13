@@ -14,4 +14,7 @@ type CommentStore interface {
 	SearchByEmbedding(ctx context.Context, args SearchComments) ([]CommentHit, error)
 	UpdateOutcome(ctx context.Context, id CommentId, outcome Outcome, signal OutcomeSignal) error
 	ListByPr(ctx context.Context, ref ports.PrRef) ([]Comment, error)
+	// GetByGithubId looks up a comment by its VCS-side external id.
+	// Returns found=false when no such comment exists.
+	GetByGithubId(ctx context.Context, githubId int64) (c Comment, found bool, err error)
 }

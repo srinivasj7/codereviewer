@@ -1,13 +1,85 @@
-// feedback-worker consumes FeedbackEvent messages and updates comment
-// outcomes. Slice 4 contains the real implementation.
+// feedback-worker consumes FeedbackJob messages from the bus and
+// records the implied outcome on the targeted bot comment.
+//
+// Composition root: loads config, picks adapter implementations,
+// wires the pipeline, and starts consuming.
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"codereviewer/internal/boot"
+	"codereviewer/internal/config"
+	"codereviewer/internal/core/pipelines/feedback"
+	"codereviewer/internal/ports"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "feedback-worker: not yet runnable; slice 4 adds the feedback pipeline")
-	os.Exit(0)
+	cfgPath := flag.String("config", "config.toml", "path to TOML config file")
+	flag.Parse()
+
+	if err := run(*cfgPath); err != nil {
+		fmt.Fprintln(os.Stderr, "feedback-worker:", err)
+		os.Exit(1)
+	}
+}
+
+func run(cfgPath string) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	clock := boot.PickClock()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
+	defer flushObs(shutdownObs)
+
+	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
+	if err != nil {
+		return fmt.Errorf("bus: %w", err)
+	}
+
+	stores, err := boot.PickStores(ctx, cfg.Store, obs)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if stores.Close != nil {
+		defer stores.Close()
+	}
+
+	pipeline := feedback.NewPipeline(feedback.Deps{
+		Comments: stores.Comments,
+		Feedback: stores.Feedback,
+		Clock:    clock,
+		Obs:      obs,
+	})
+
+	sub, err := bus.Consume(ctx, ports.QueueFeedback, pipeline.Handle)
+	if err != nil {
+		return fmt.Errorf("consume: %w", err)
+	}
+	defer func() { _ = sub.Stop() }()
+
+	obs.Logger.Info("feedback-worker started; awaiting jobs")
+	<-ctx.Done()
+	obs.Logger.Info("feedback-worker shutting down")
+	return nil
+}
+
+// flushObs gives the OTel exporters a small window to drain. Errors are
+// dropped — at shutdown time there's no actionable handler.
+func flushObs(shutdown func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }

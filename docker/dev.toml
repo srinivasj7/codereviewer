@@ -33,8 +33,9 @@ per_pr_token_cap   = 30000
 provider = "env"
 
 [observability]
-sink         = "stdout"
-service_name = "codereviewer"
+sink          = "otel"
+otlp_endpoint = "otel-collector:4318"
+service_name  = "codereviewer"
 
 [cost]
 daily_usd_cap_default = 5.00

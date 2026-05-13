@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
@@ -36,10 +37,12 @@ func run(cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("secrets: %w", err)
 	}
-	obs := boot.PickObservability(cfg.Observability)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
+	defer flushObs(shutdownObs)
 
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
@@ -86,4 +89,12 @@ func run(cfgPath string) error {
 	<-ctx.Done()
 	obs.Logger.Info("indexer-worker shutting down")
 	return nil
+}
+
+// flushObs gives the OTel exporters a small window to drain. Errors are
+// dropped — at shutdown time there's no actionable handler.
+func flushObs(shutdown func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }

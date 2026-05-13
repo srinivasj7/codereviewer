@@ -42,10 +42,11 @@ type GithubPushEvent struct {
 type GithubReviewCommentEvent struct {
 	Action  string `json:"action"`
 	Comment struct {
-		Id      int64  `json:"id"`
-		Body    string `json:"body"`
-		Path    string `json:"path"`
-		User    struct {
+		Id          int64  `json:"id"`
+		InReplyToId int64  `json:"in_reply_to_id"`
+		Body        string `json:"body"`
+		Path        string `json:"path"`
+		User        struct {
 			Login string `json:"login"`
 			Type  string `json:"type"` // "Bot" | "User"
 		} `json:"user"`

@@ -299,6 +299,18 @@ func (s *CommentStore) UpdateOutcome(_ context.Context, id store.CommentId, outc
 	return fmt.Errorf("fake CommentStore: unknown comment %s", id)
 }
 
+// GetByGithubId returns the first comment with a matching github_id.
+func (s *CommentStore) GetByGithubId(_ context.Context, githubId int64) (store.Comment, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.comments {
+		if c.GithubId != nil && *c.GithubId == githubId {
+			return c, true, nil
+		}
+	}
+	return store.Comment{}, false, nil
+}
+
 // AllComments returns a snapshot of every upserted comment. Test helper.
 func (s *CommentStore) AllComments() []store.Comment {
 	s.mu.Lock()

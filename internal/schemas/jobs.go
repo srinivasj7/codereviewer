@@ -33,17 +33,23 @@ func (j IndexJob) IdempotencyKey() string {
 	return fmt.Sprintf("index:%s:%s:%s", j.TenantId, j.RepoId, j.HeadSha)
 }
 
-// FeedbackJob carries one outcome signal from the VCS.
+// FeedbackJob carries one observed signal targeting a bot comment.
+// Kind discriminates: "reaction" with Reaction set, or "reply" with
+// AuthorId set. CommentExternalId is the GitHub id of the bot comment
+// that received the signal (used to look up our internal row).
 type FeedbackJob struct {
 	TenantId          ports.TenantId `json:"tenant_id"`
 	RepoId            ports.RepoId   `json:"repo_id"`
+	Kind              string         `json:"kind"`
 	CommentExternalId int64          `json:"comment_external_id"`
-	Signal            string         `json:"signal"`
+	Reaction          string         `json:"reaction,omitempty"`
+	AuthorId          string         `json:"author_id,omitempty"`
 }
 
-// IdempotencyKey for FeedbackJob.
+// IdempotencyKey for FeedbackJob: a given (kind, comment, reaction,
+// author) is one logical signal regardless of redelivery.
 func (j FeedbackJob) IdempotencyKey() string {
-	return fmt.Sprintf("feedback:%d:%s", j.CommentExternalId, j.Signal)
+	return fmt.Sprintf("feedback:%s:%d:%s:%s", j.Kind, j.CommentExternalId, j.Reaction, j.AuthorId)
 }
 
 // BackfillJob requests historical comment ingestion.

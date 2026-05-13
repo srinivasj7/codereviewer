@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 3 complete; slice 4 next
+**Status:** Slice 4 complete; slice 5 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -43,7 +43,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack. Verified: all 4 Go images build (including indexer with CGO+tree-sitter), postgres+pgvector and NATS come up healthy, `docker compose run --rm migrate` applies all 4 migrations cleanly (11 tables created in the schema). Slice 0 tests still green. |
 | 2. Naive review pipeline | **Complete** | RepoStore + auto-registration on every webhook, migration 005 fixes id-type mismatch (UUID → TEXT), tiktoken-based token estimation for OpenAI models, per-stage latency stopwatch in the review pipeline (greppable p95 line), configurable gateway listen address, /review slash command, storepostgres contract tests (6 tests, external Postgres via TESTS_POSTGRES_URL — no testcontainers dep per library policy). Verified: `go vet/build/test ./...` clean; `make test-integration` passes against `docker compose up postgres`. |
 | 3. Retrieval + backfill | **Complete** | Live retrievers wired into the review pipeline (one shared diff embedding → code + comment vector search; rules scope-matched in-memory). Format helpers render `<file>:lines (symbol)`, `[OUTCOME] <file>`, `title\ndescription`. `cmd/backfill-cli` paginates GitHub Search closed-PR results, ingests review comments + diff hunks + reactions, embeds via the cache (hash dedup), upserts with `source='human'` and `RETURNING comment_id` so re-runs return the stable id. New tests: 4 backfill unit tests + 4 format tests + a storepostgres idempotency test (8 contract tests total). |
-| 4. Rules + feedback + observability | Not started | |
+| 4. Rules + feedback + observability | **Complete** | rulessourcegit (git CLI clone + `**` glob walk), rulessync pipeline (frontmatter+body parser, cached embeddings, tombstoning), feedback pipeline (reactions + replies; implicit line-changed deferred), gateway routes reactions+replies to the feedback queue, obsotel adapter (OTLP HTTP for traces + metrics; stdout fallback on init failure), OTel collector service + dev.toml flip to `sink="otel"`. New tests: 8 feedback pipeline tests + 7 rulessync parser tests + 3 rulessourcegit glob tests. All packages build + test green. |
 | 5. EC2 deploy profile | Not started | |
 
 ---
@@ -598,6 +598,15 @@ Conventions:
 - Dashboard panels for the metrics in design §10
 
 **Done when:** thumbs-down on a bot comment is recorded within seconds. Adding a rule in the rules repo and pushing → rule is enforced in the next review. Dashboard shows review.duration, cost, false-positive trend.
+
+## Slice 4 deviations from the design
+
+- **Implicit "line-changed" feedback signal deferred.** Design §6.3 step 1 fires `implicit-line-changed` when a new commit modifies the lines a bot commented on. Implementing this requires diffing successive commits inside the feedback pipeline (or a `pull_request.synchronize` handler that re-evaluates each open bot comment). The current implementation captures thumbs-up/down reactions and replies — enough to drive the retrieval weighting. Tracked for slice 5+.
+- **Dashboard panels not authored.** Slice 4 ships the OTel collector and the per-pipeline metrics (counters and histograms) flowing through it, but the visualization surface — Grafana dashboard JSON or equivalent — is left to whoever owns the operational tooling in deployment. The names are stable so dashboards can be built without further code changes.
+- **rulessync is a CLI, not a webhook handler.** Design §6.5 has the rules sync triggered by `push` on the rules repo. Slice 4 ships it as `cmd/rules-sync` (run via cron or `docker compose run --rm rules-sync`). The webhook trigger is a thin gateway addition deferred to slice 5.
+- **OTLP exporter uses `WithInsecure()`.** Default for local docker-compose where the collector is a sibling container. Production deploys MUST flip this — either via TLS to a remote collector or via an in-pod sidecar bound to localhost. Tracked as a slice 5 hardening item.
+- **`feedback_queue_url` field exists in TOML but the bus adapter shares the single NATS URL across queues.** No behavior gap — JetStream subjects partition the queues — but it leaves a misleading config knob. Cleanup deferred.
+- **Single-tenant rules.** rulessync writes all rules under one TenantId (the configured `tenant.id`); design's multi-tenant rules-sync where one rules repo serves many tenants needs a tenant-aware folder convention which isn't pinned down yet.
 
 ---
 

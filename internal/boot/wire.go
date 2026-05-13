@@ -11,6 +11,7 @@ import (
 	"codereviewer/internal/adapters/busnats"
 	"codereviewer/internal/adapters/clocksystem"
 	"codereviewer/internal/adapters/llmlitellm"
+	"codereviewer/internal/adapters/obsotel"
 	"codereviewer/internal/adapters/obsstdout"
 	"codereviewer/internal/adapters/parsertreesitter"
 	"codereviewer/internal/adapters/secretsenv"
@@ -64,10 +65,28 @@ func PickSecrets(cfg schemas.SecretsConfig) (ports.SecretsProvider, error) {
 	return nil, fmt.Errorf("unknown secrets.provider: %q", cfg.Provider)
 }
 
-// PickObservability selects an Obs bundle. Slice 1 always returns
-// obsstdout; the OTLP exporter wiring lands in slice 4.
-func PickObservability(cfg schemas.ObservabilityConfig) ports.Obs {
-	return obsstdout.New(cfg.ServiceName)
+// PickObservability selects an Obs bundle. Sink "stdout" returns
+// obsstdout (no shutdown needed); "otel" returns the OTLP-HTTP-backed
+// obsotel adapter and a shutdown function that flushes both providers.
+// On "otel" exporter setup failure, falls back to stdout so the process
+// stays runnable — telemetry is best-effort.
+func PickObservability(ctx context.Context, cfg schemas.ObservabilityConfig) (ports.Obs, func(context.Context) error) {
+	noShutdown := func(context.Context) error { return nil }
+	switch cfg.Sink {
+	case "otel":
+		if cfg.OtlpEndpoint == "" {
+			return obsstdout.New(cfg.ServiceName), noShutdown
+		}
+		obs, shutdown, err := obsotel.New(ctx, cfg.ServiceName, cfg.OtlpEndpoint)
+		if err != nil {
+			fallback := obsstdout.New(cfg.ServiceName)
+			fallback.Logger.Warn("obsotel init failed; falling back to stdout",
+				"endpoint", cfg.OtlpEndpoint, "err", err.Error())
+			return fallback, noShutdown
+		}
+		return obs, shutdown
+	}
+	return obsstdout.New(cfg.ServiceName), noShutdown
 }
 
 // PickClock returns the system clock.

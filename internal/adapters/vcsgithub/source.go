@@ -197,9 +197,11 @@ func parseReviewComment(deliveryId string, body []byte) (ports.WebhookEvent, err
 				PrNumber: p.PullRequest.Number,
 				HeadSha:  p.PullRequest.Head.Sha,
 			},
-			AuthorId: p.Comment.User.Login,
-			Body:     p.Comment.Body,
-			IsBot:    p.Comment.User.Type == "Bot",
+			CommentId:   p.Comment.Id,
+			AuthorId:    p.Comment.User.Login,
+			Body:        p.Comment.Body,
+			IsBot:       p.Comment.User.Type == "Bot",
+			InReplyToId: p.Comment.InReplyToId,
 		},
 	}, nil
 }

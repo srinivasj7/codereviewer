@@ -69,6 +69,8 @@ services:
         condition: service_completed_successfully
       nats:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
     ports:
       - "8080:8080"
     env_file: [.env]
@@ -90,6 +92,8 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
     env_file: [.env]
     volumes:
       - ./docker/dev.toml:/app/config.toml:ro
@@ -109,11 +113,69 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
+      otel-collector:
+        condition: service_healthy
     env_file: [.env]
     volumes:
       - ./docker/dev.toml:/app/config.toml:ro
       - ./docker/github-app-key.pem:/run/secrets/github-app-key.pem:ro
     command: ["--config", "/app/config.toml"]
+
+  feedback-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        CMD: feedback-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+    env_file: [.env]
+    volumes:
+      - ./docker/dev.toml:/app/config.toml:ro
+    command: ["--config", "/app/config.toml"]
+
+  # rules-sync runs to completion; bring it up on demand with
+  # `docker compose run --rm rules-sync`. Requires git in the image.
+  rules-sync:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        CMD: rules-sync
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      litellm:
+        condition: service_healthy
+    env_file: [.env]
+    volumes:
+      - ./docker/dev.toml:/app/config.toml:ro
+    profiles: ["tools"]
+    command: ["--config", "/app/config.toml"]
+
+  # OpenTelemetry collector. Receives traces + metrics from the workers
+  # over OTLP/HTTP on 4318. The dev profile prints them to stdout via
+  # the `debug` exporter — production deployments swap in OTLP-to-vendor
+  # exporters via the collector config file.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4318:4318" # OTLP HTTP
+      - "13133:13133" # health check
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:13133/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pg_data:
