@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "query"
+    gen:
+      go:
+        package: "dbquery"
+        sql_package: "pgx/v5"
+        out: "query"
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "vector"
+            go_type: "github.com/pgvector/pgvector-go.Vector"

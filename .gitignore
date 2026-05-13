@@ -1,0 +1,38 @@
+# Build output
+bin/
+dist/
+*.exe
+*.test
+*.out
+*.prof
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local config
+*.local.toml
+dev.toml
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code session state
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage.out
+coverage.html
+
+# Temp
+tmp/
