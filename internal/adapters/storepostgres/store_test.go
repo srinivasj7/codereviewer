@@ -89,7 +89,7 @@ func truncateAll(t *testing.T) {
 	tables := []string{
 		"feedback_events", "code_chunks", "review_comments", "rules",
 		"pr_runs", "cost_caps", "embedding_cache", "job_idempotency",
-		"repos", "tenants",
+		"app_settings", "repos", "tenants",
 	}
 	for _, table := range tables {
 		_, err := testStores.Pool.Exec(testCtx, "TRUNCATE TABLE "+table+" CASCADE")
@@ -247,6 +247,41 @@ func TestCommentStore_UpsertIdempotentOnGithubId(t *testing.T) {
 	require.Len(t, got, 1, "the row count must stay at 1 across re-runs")
 	assert.Equal(t, "updated body", got[0].CommentText)
 	assert.Equal(t, store.OutcomeAccepted, got[0].Outcome)
+}
+
+func TestSettingsStore_RoundTrip(t *testing.T) {
+	s := requireDB(t)
+
+	v, found, err := s.Settings.Get(testCtx, "missing-key")
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, v)
+
+	require.NoError(t, s.Settings.Set(testCtx, "rules.git_url", "https://example.com/rules.git", "alice@example.com"))
+	require.NoError(t, s.Settings.Set(testCtx, "cost.daily_usd_cap_default", "12.5", "alice@example.com"))
+
+	v, found, err = s.Settings.Get(testCtx, "rules.git_url")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, "https://example.com/rules.git", v)
+
+	all, err := s.Settings.GetAll(testCtx)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	assert.Equal(t, "cost.daily_usd_cap_default", all[0].Key)
+	assert.Equal(t, "rules.git_url", all[1].Key)
+	assert.Equal(t, "alice@example.com", all[0].UpdatedBy)
+
+	// Set is upsert.
+	require.NoError(t, s.Settings.Set(testCtx, "rules.git_url", "https://example.com/other.git", "bob@example.com"))
+	v, _, _ = s.Settings.Get(testCtx, "rules.git_url")
+	assert.Equal(t, "https://example.com/other.git", v)
+
+	// Delete removes; absent key delete is not an error.
+	require.NoError(t, s.Settings.Delete(testCtx, "rules.git_url"))
+	require.NoError(t, s.Settings.Delete(testCtx, "rules.git_url"))
+	_, found, _ = s.Settings.Get(testCtx, "rules.git_url")
+	assert.False(t, found)
 }
 
 func TestCostCapStore_GetEffective_FallsThroughToDefault(t *testing.T) {

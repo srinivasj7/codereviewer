@@ -1,0 +1,57 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>codereviewer admin — {{.Title}}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; background: #f7f7f8; color: #1a1a1a; }
+header { background: #1a1a1a; color: #fff; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+header a { color: #fff; text-decoration: none; margin-right: 1rem; }
+header a:hover { text-decoration: underline; }
+main { max-width: 64rem; margin: 1.5rem auto; padding: 0 1.5rem; }
+section { background: #fff; border: 1px solid #e3e3e3; border-radius: 6px; padding: 1.25rem; margin-bottom: 1.25rem; }
+h1 { margin-top: 0; font-size: 1.25rem; }
+h2 { margin-top: 0; font-size: 1rem; color: #444; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ececec; font-size: 0.9rem; }
+th { background: #fafafa; font-weight: 600; }
+input[type=text], input[type=password], input[type=number], textarea, select { width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #c8c8c8; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
+textarea { font-family: ui-monospace, SFMono-Regular, monospace; min-height: 8rem; }
+button, .btn { background: #2d6cdf; color: #fff; border: 0; padding: 0.5rem 0.9rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; text-decoration: none; display: inline-block; }
+button:hover, .btn:hover { background: #1c52b3; }
+.btn-secondary { background: #e8e8ea; color: #1a1a1a; }
+.btn-secondary:hover { background: #d8d8da; }
+.flash { padding: 0.6rem 0.9rem; border-radius: 4px; margin-bottom: 1rem; }
+.flash.ok { background: #d4edda; color: #155724; }
+.flash.err { background: #f8d7da; color: #721c24; }
+.muted { color: #777; font-size: 0.85rem; }
+form.inline { display: inline; }
+.row { display: flex; gap: 1rem; align-items: center; }
+.row > * { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>codereviewer admin</strong>
+    {{if .Authed}}
+    <a href="/">dashboard</a>
+    <a href="/settings">settings</a>
+    <a href="/export">export</a>
+    <a href="/import">import</a>
+    {{end}}
+  </div>
+  <div>
+    {{if .Authed}}
+    <span class="muted">signed in as {{.Subject}}</span>
+    <form method="POST" action="/logout" class="inline"><button class="btn-secondary" type="submit">log out</button></form>
+    {{end}}
+  </div>
+</header>
+<main>
+  {{if .FlashOk}}<div class="flash ok">{{.FlashOk}}</div>{{end}}
+  {{if .FlashErr}}<div class="flash err">{{.FlashErr}}</div>{{end}}
+  {{template "body" .}}
+</main>
+</body>
+</html>{{end}}

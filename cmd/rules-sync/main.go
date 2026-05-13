@@ -37,14 +37,6 @@ func run(cfgPath, tenantOverride, pattern string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Rules.GitURL == "" {
-		return fmt.Errorf("rules.git_url is empty in %s", cfgPath)
-	}
-
-	tenantId := ports.TenantId(cfg.Tenant.Id)
-	if tenantOverride != "" {
-		tenantId = ports.TenantId(tenantOverride)
-	}
 
 	secrets, err := boot.PickSecrets(cfg.Secrets)
 	if err != nil {
@@ -54,19 +46,33 @@ func run(cfgPath, tenantOverride, pattern string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Stores boot from TOML-only config so the runtime overlay table is
+	// reachable; everything else then sees the overlayed values.
+	stores, err := boot.PickStores(ctx, cfg.Store, ports.Obs{})
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if stores.Close != nil {
+		defer stores.Close()
+	}
+	if err := config.ApplyOverlay(ctx, cfg, stores.Settings); err != nil {
+		return fmt.Errorf("apply settings overlay: %w", err)
+	}
+
+	if cfg.Rules.GitURL == "" {
+		return fmt.Errorf("rules.git_url is empty (set via TOML or admin UI settings)")
+	}
+	tenantId := ports.TenantId(cfg.Tenant.Id)
+	if tenantOverride != "" {
+		tenantId = ports.TenantId(tenantOverride)
+	}
+
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
 	llm, err := boot.PickLlm(cfg.Llm, secrets, obs)
 	if err != nil {
 		return fmt.Errorf("llm: %w", err)
-	}
-	stores, err := boot.PickStores(ctx, cfg.Store, obs)
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-	if stores.Close != nil {
-		defer stores.Close()
 	}
 
 	source := rulessourcegit.New(pattern)

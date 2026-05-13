@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 4 complete; slice 5 next
+**Status:** Slice 4 + 4.5 (admin UI) complete; slice 5 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -44,6 +44,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | 2. Naive review pipeline | **Complete** | RepoStore + auto-registration on every webhook, migration 005 fixes id-type mismatch (UUID → TEXT), tiktoken-based token estimation for OpenAI models, per-stage latency stopwatch in the review pipeline (greppable p95 line), configurable gateway listen address, /review slash command, storepostgres contract tests (6 tests, external Postgres via TESTS_POSTGRES_URL — no testcontainers dep per library policy). Verified: `go vet/build/test ./...` clean; `make test-integration` passes against `docker compose up postgres`. |
 | 3. Retrieval + backfill | **Complete** | Live retrievers wired into the review pipeline (one shared diff embedding → code + comment vector search; rules scope-matched in-memory). Format helpers render `<file>:lines (symbol)`, `[OUTCOME] <file>`, `title\ndescription`. `cmd/backfill-cli` paginates GitHub Search closed-PR results, ingests review comments + diff hunks + reactions, embeds via the cache (hash dedup), upserts with `source='human'` and `RETURNING comment_id` so re-runs return the stable id. New tests: 4 backfill unit tests + 4 format tests + a storepostgres idempotency test (8 contract tests total). |
 | 4. Rules + feedback + observability | **Complete** | rulessourcegit (git CLI clone + `**` glob walk), rulessync pipeline (frontmatter+body parser, cached embeddings, tombstoning), feedback pipeline (reactions + replies; implicit line-changed deferred), gateway routes reactions+replies to the feedback queue, obsotel adapter (OTLP HTTP for traces + metrics; stdout fallback on init failure), OTel collector service + dev.toml flip to `sink="otel"`. New tests: 8 feedback pipeline tests + 7 rulessync parser tests + 3 rulessourcegit glob tests. All packages build + test green. |
+| 4.5. Admin web UI + import/export | **Complete** | New `app_settings` table (migration 006), `SettingsStore` port + Postgres adapter + fake + contract test. Hybrid config overlay: TOML bootstrap, `app_settings` overlays runtime-tunable keys (rules URL, cost caps, tenant info, model choices, observability sink/endpoint). New `cmd/admin-ui` binary on `:8090` with chi router + html/template; password + signed-cookie session auth; GitHub OAuth as a second login path (org-membership check). Dashboard, settings editor, config import/export (TOML), selective DB export/import (code_chunks + rules + review_comments as JSON), scheduled auto-export to a configured directory. Worker boot order now `PickStores → ApplyOverlay → PickObservability` so live setting changes are visible after a restart. New tests: 15 admin handler/session tests + 6 overlay tests + 1 storepostgres settings contract test. |
 | 5. EC2 deploy profile | Not started | |
 
 ---
@@ -607,6 +608,32 @@ Conventions:
 - **OTLP exporter uses `WithInsecure()`.** Default for local docker-compose where the collector is a sibling container. Production deploys MUST flip this — either via TLS to a remote collector or via an in-pod sidecar bound to localhost. Tracked as a slice 5 hardening item.
 - **`feedback_queue_url` field exists in TOML but the bus adapter shares the single NATS URL across queues.** No behavior gap — JetStream subjects partition the queues — but it leaves a misleading config knob. Cleanup deferred.
 - **Single-tenant rules.** rulessync writes all rules under one TenantId (the configured `tenant.id`); design's multi-tenant rules-sync where one rules repo serves many tenants needs a tenant-aware folder convention which isn't pinned down yet.
+
+---
+
+# Slice 4.5 — Admin web UI + import/export
+
+**Goal:** an authenticated operator can configure the system from a browser without editing TOML files, and back up the durable retrieval data to a portable JSON snapshot.
+
+**Adds:**
+- `cmd/admin-ui` binary serving `:8090` — chi router, server-rendered `html/template` views, signed-cookie session auth.
+- Two login paths: single admin password (env-sourced via SecretsProvider) and optional GitHub OAuth with org-membership check.
+- `app_settings` table (migration 006) + `SettingsStore` port. Hybrid overlay: TOML defines bootstrap (DB URL, secrets provider, listen addr, bus URLs); the settings table overrides runtime-tunable values listed in `config.OverlayKeys`.
+- Dashboard with table counts, current overlay values, export/import buttons.
+- Config import/export as TOML; selective DB export/import (code_chunks + rules + review_comments) as JSON with embeddings included.
+- Optional `AutoExporter` goroutine writes timestamped TOML + JSON snapshots into a configurable directory at a configurable interval.
+
+**Done when:** an operator can open `http://localhost:8090`, log in with the admin password, change `rules.git_url`, save, restart the workers via `docker compose restart`, and have the new value take effect. Re-importing a previous JSON snapshot restores the retrieval data without manual SQL.
+
+## Slice 4.5 deviations from the design
+
+- **Restart required for worker uptake of new settings.** Workers apply the overlay at boot; live SIGHUP / config-reload is not implemented. The admin UI saves the value and shows "Restart workers to pick them up" in the success flash. Hot-reload would require either polling `app_settings` from each pipeline or pushing settings change events through the bus; deferred until there's a real operational need.
+- **Single admin user.** The password is one secret shared by every operator. Audit identifies a writer only as `password` (or `github:<login>` when OAuth is used). True per-user accounts are deferred — the pilot deployment has ~5 operators and Git history on `app_settings.updated_by` is sufficient.
+- **CSRF protection is implicit.** The admin UI accepts state-changing POSTs only on same-site cookies (`SameSiteLaxMode`) and password-validates the session. No CSRF token is rendered into forms; if the UI ever needs to accept cross-origin requests, this becomes a hardening item.
+- **Cookie secure flag is off by default.** Set by the operator's reverse proxy (TLS terminator). The compose file binds `:8090` plain HTTP for local dev. Production deploys must set `secure: true` when constructing the Server.
+- **DB export does not bundle `pr_runs`, caches, or `app_settings`.** Per the design selection: only the three durable retrieval tables. `app_settings` is included implicitly via the config export — re-importing the config TOML restores the settings.
+- **No retention policy on auto-export files.** The scheduler appends new files; pruning is the operator's problem. The export volume is a docker named volume, so disk pressure is at least bounded by the host.
+- **OAuth callback URL is fixed at boot.** It comes from `admin.github_oauth.callback_url` in TOML. Multiple admin-ui replicas serving different hostnames would need a stable URL fronted by a load balancer.
 
 ---
 

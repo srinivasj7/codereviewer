@@ -3,6 +3,7 @@ package fakes
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -463,5 +464,67 @@ func (c *EmbeddingCache) PutMany(_ context.Context, entries []store.EmbeddingCac
 	for _, e := range entries {
 		c.entries[e.Hash] = e.Embedding
 	}
+	return nil
+}
+
+// SettingsStore is a minimal in-memory SettingsStore.
+type SettingsStore struct {
+	mu       sync.Mutex
+	settings map[string]store.Setting
+}
+
+// NewSettingsStore returns an empty store.
+func NewSettingsStore() *SettingsStore {
+	return &SettingsStore{settings: make(map[string]store.Setting)}
+}
+
+// Get returns the value for key.
+func (s *SettingsStore) Get(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.settings[key]
+	if !ok {
+		return "", false, nil
+	}
+	return v.Value, true, nil
+}
+
+// GetAll returns every setting, ordered by key.
+func (s *SettingsStore) GetAll(_ context.Context) ([]store.Setting, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make([]string, 0, len(s.settings))
+	for k := range s.settings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]store.Setting, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, s.settings[k])
+	}
+	return out, nil
+}
+
+// Set upserts.
+func (s *SettingsStore) Set(_ context.Context, key, value, updatedBy string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if updatedBy == "" {
+		updatedBy = "system"
+	}
+	s.settings[key] = store.Setting{
+		Key:       key,
+		Value:     value,
+		UpdatedAt: time.Now(),
+		UpdatedBy: updatedBy,
+	}
+	return nil
+}
+
+// Delete removes the key.
+func (s *SettingsStore) Delete(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.settings, key)
 	return nil
 }

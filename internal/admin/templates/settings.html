@@ -1,0 +1,23 @@
+{{define "body"}}
+<section>
+<h1>Settings</h1>
+<p class="muted">These values override the TOML defaults for the next worker restart. Workers re-read at startup; you may need to restart the workers (or the docker-compose services) to apply changes.</p>
+<form method="POST" action="/settings">
+<table>
+<thead><tr><th style="width: 22rem;">Key</th><th>Value</th></tr></thead>
+<tbody>
+{{range .Fields}}
+<tr>
+  <td><code>{{.Key}}</code><br><span class="muted">{{.Help}}</span></td>
+  <td><input type="text" name="{{.Key}}" value="{{.Value}}"></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+<div style="margin-top: 1rem;">
+  <button type="submit">Save</button>
+  <a class="btn btn-secondary" href="/">Cancel</a>
+</div>
+</form>
+</section>
+{{end}}

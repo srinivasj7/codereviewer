@@ -50,3 +50,19 @@ listen_addr = ":8080"
 [tenant]
 id   = "default-tenant"
 name = "default"
+
+[admin]
+listen_addr         = ":8090"
+password            = "${ADMIN_PASSWORD}"
+session_secret      = "${ADMIN_SESSION_SECRET}"
+session_minutes     = 60
+export_dir          = "/app/exports"
+auto_export_enabled = true
+auto_export_hours   = 24
+
+# Optional GitHub OAuth (leave client_id empty to disable).
+[admin.github_oauth]
+client_id     = "${ADMIN_GITHUB_OAUTH_CLIENT_ID}"
+client_secret = "${ADMIN_GITHUB_OAUTH_CLIENT_SECRET}"
+callback_url  = "${ADMIN_GITHUB_OAUTH_CALLBACK_URL}"
+allowed_orgs  = []

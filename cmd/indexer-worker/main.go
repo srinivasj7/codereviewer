@@ -41,6 +41,19 @@ func run(cfgPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Stores boot from TOML-only config so the runtime overlay table is
+	// reachable; everything else then sees the overlayed values.
+	stores, err := boot.PickStores(ctx, cfg.Store, ports.Obs{})
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if stores.Close != nil {
+		defer stores.Close()
+	}
+	if err := config.ApplyOverlay(ctx, cfg, stores.Settings); err != nil {
+		return fmt.Errorf("apply settings overlay: %w", err)
+	}
+
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
@@ -60,14 +73,6 @@ func run(cfgPath string) error {
 	}
 
 	parser := boot.PickParser()
-
-	stores, err := boot.PickStores(ctx, cfg.Store, obs)
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-	if stores.Close != nil {
-		defer stores.Close()
-	}
 
 	pipeline := indexer.NewPipeline(indexer.Deps{
 		Vcs:            vcs,

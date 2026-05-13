@@ -22,8 +22,13 @@ import (
 	"codereviewer/internal/schemas"
 )
 
-// Stores bundles the eight store sub-ports. Adapters that back all of
-// them with one connection (storepostgres) return all eight at once.
+// Stores bundles the nine store sub-ports. Adapters that back all of
+// them with one connection (storepostgres) return all nine at once.
+//
+// RawHandle is the adapter's underlying connection (e.g. *pgxpool.Pool
+// for storepostgres). It's `any` to keep the bus of dependencies above
+// the adapter packages; consumers that need raw SQL access (the admin
+// UI for export/import) type-assert internally.
 type Stores struct {
 	Repos          store.RepoStore
 	CodeChunks     store.CodeChunkStore
@@ -33,6 +38,8 @@ type Stores struct {
 	Feedback       store.FeedbackStore
 	CostCaps       store.CostCapStore
 	EmbeddingCache store.EmbeddingCache
+	Settings       store.SettingsStore
+	RawHandle      any
 	Close          func()
 }
 
@@ -143,6 +150,8 @@ func PickStores(ctx context.Context, cfg schemas.StoreConfig, _ ports.Obs) (Stor
 			Feedback:       s.Feedback,
 			CostCaps:       s.CostCaps,
 			EmbeddingCache: s.EmbeddingCache,
+			Settings:       s.Settings,
+			RawHandle:      pool,
 			Close:          s.Close,
 		}, nil
 	case "memory":

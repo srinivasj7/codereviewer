@@ -1,0 +1,39 @@
+{{define "body"}}
+<section>
+<h1>Dashboard</h1>
+<p class="muted">codereviewer is running. Service: <code>{{.ServiceName}}</code> · Tenant: <code>{{.TenantId}}</code></p>
+</section>
+
+<section>
+<h2>Runtime configuration (overlay)</h2>
+<p class="muted">Edit the runtime-tunable settings on the <a href="/settings">settings</a> page. Bootstrap config (database URL, secrets provider, message bus) is TOML-only.</p>
+<table>
+<thead><tr><th style="width: 24rem;">Key</th><th>Current value</th></tr></thead>
+<tbody>
+{{range .OverlayKeys}}
+<tr><td><code>{{.Key}}</code></td><td>{{.Value}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Counts</h2>
+<table>
+<tbody>
+<tr><td>code_chunks</td><td>{{.Counts.CodeChunks}}</td></tr>
+<tr><td>rules</td><td>{{.Counts.Rules}}</td></tr>
+<tr><td>review_comments</td><td>{{.Counts.ReviewComments}}</td></tr>
+<tr><td>pr_runs</td><td>{{.Counts.PrRuns}}</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Backup &amp; restore</h2>
+<p class="muted">Selective export: <code>code_chunks</code>, <code>rules</code>, <code>review_comments</code>. Excludes <code>pr_runs</code>, caches, and secrets.</p>
+<a class="btn" href="/export/config">Export config (TOML)</a>
+<a class="btn" href="/export/db">Export data (JSON)</a>
+<a class="btn btn-secondary" href="/import">Import…</a>
+</section>
+{{end}}

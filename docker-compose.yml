@@ -139,6 +139,23 @@ services:
       - ./docker/dev.toml:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]
 
+  admin-ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        CMD: admin-ui
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8090:8090"
+    env_file: [.env]
+    volumes:
+      - ./docker/dev.toml:/app/config.toml:ro
+      - admin_exports:/app/exports
+    command: ["--config", "/app/config.toml"]
+
   # rules-sync runs to completion; bring it up on demand with
   # `docker compose run --rm rules-sync`. Requires git in the image.
   rules-sync:
@@ -179,3 +196,4 @@ services:
 
 volumes:
   pg_data:
+  admin_exports:

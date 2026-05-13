@@ -1,0 +1,19 @@
+{{define "body"}}
+<section>
+<h1>Import</h1>
+<p class="muted">Importing overwrites existing rows by primary key. Always export first if you want a rollback path.</p>
+
+<h2>Import config (TOML)</h2>
+<form method="POST" action="/import/config" enctype="multipart/form-data">
+  <input type="file" name="file" accept=".toml" required>
+  <button type="submit">Upload &amp; apply</button>
+</form>
+
+<h2 style="margin-top: 1.5rem;">Import data (JSON)</h2>
+<p class="muted">Upserts rows into <code>code_chunks</code>, <code>rules</code>, <code>review_comments</code>.</p>
+<form method="POST" action="/import/db" enctype="multipart/form-data">
+  <input type="file" name="file" accept=".json" required>
+  <button type="submit">Upload &amp; apply</button>
+</form>
+</section>
+{{end}}

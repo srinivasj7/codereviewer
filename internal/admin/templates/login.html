@@ -1,0 +1,17 @@
+{{define "body"}}
+<section style="max-width: 24rem; margin: 0 auto;">
+<h1>Sign in</h1>
+<form method="POST" action="/login">
+  <div style="margin-bottom: 0.75rem;">
+    <label class="muted" for="p">Admin password</label>
+    <input id="p" type="password" name="password" autocomplete="current-password" autofocus>
+  </div>
+  <button type="submit">Sign in</button>
+</form>
+{{if .OAuthEnabled}}
+<div style="margin-top: 1rem; border-top: 1px solid #eee; padding-top: 1rem;">
+  <a class="btn btn-secondary" href="/oauth/github">Sign in with GitHub</a>
+</div>
+{{end}}
+</section>
+{{end}}

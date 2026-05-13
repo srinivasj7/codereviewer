@@ -33,6 +33,7 @@ Services that come up:
 - **litellm** — OpenAI-compatible proxy at port 4000
 - **migrate** — one-shot init container; runs goose up against postgres
 - **webhook-gateway** — chi HTTP server on port 8080, verifies HMAC and enqueues to NATS
+- **admin-ui** — operator web UI on port 8090 (set `ADMIN_PASSWORD` in `.env`)
 - **review-worker** — consumes review-jobs queue
 - **indexer-worker** — consumes index-jobs queue
 - **feedback-worker** — consumes feedback-events queue (reactions + replies on bot comments)
@@ -95,9 +96,31 @@ The implicit "lines-modified-after-the-comment" signal from design §6.3 is trac
 
 Workers emit OTLP/HTTP traces + metrics to the collector at `otel-collector:4318`. The dev collector config (`docker/otel-collector.yaml`) prints everything through the `debug` exporter — swap in OTLP-to-vendor exporters for production. To run with stdout-only observability instead, set `[observability].sink = "stdout"` in `dev.toml`.
 
+## Admin UI
+
+`cmd/admin-ui` (port `8090` in docker-compose) gives operators a browser-driven way to manage the deployment without editing TOML files.
+
+```sh
+# Set these in .env before bringing up the stack:
+ADMIN_PASSWORD=...
+ADMIN_SESSION_SECRET=...  # 32+ random bytes
+
+docker compose up admin-ui   # http://localhost:8090
+```
+
+What you can do from the UI:
+- **Sign in** with the admin password (or GitHub OAuth if you've configured `[admin.github_oauth]` and registered an OAuth app).
+- **View the dashboard** — current overlay values, table counts, links to import/export.
+- **Edit runtime settings** — `rules.git_url`, `cost.daily_usd_cap_default`, `llm.primary_model_url`, etc. These persist in the `app_settings` table and overlay the TOML defaults when workers restart. Bootstrap config (DB URL, secrets provider, bus URL) stays in TOML — by design.
+- **Export & import config** — download the current settings as TOML, upload a previously-saved file to restore. Secrets are never included.
+- **Export & import durable data** — download `code_chunks`, `rules`, and `review_comments` as one JSON file (embeddings included). Re-import upserts by primary key. `pr_runs`, caches, and tenants are intentionally excluded.
+- **Automatic backups** — set `[admin].auto_export_enabled = true` and `[admin].export_dir = "/app/exports"` (volume mount). The admin process writes a timestamped TOML + JSON pair every `auto_export_hours`.
+
+> Workers don't watch `app_settings` live. After saving a setting, `docker compose restart review-worker indexer-worker feedback-worker webhook-gateway` to apply.
+
 ## Project status
 
-Slices 0–4 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability — complete.
+Slices 0–4 + 4.5 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI + import/export — complete.
 
 Remaining slices in [`implementation-plan.md`](./implementation-plan.md):
 - Slice 5: Terraform deploy profile (lean-self-hosted EC2)

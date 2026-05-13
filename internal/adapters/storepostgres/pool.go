@@ -36,7 +36,7 @@ func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Stores bundles the eight store implementations sharing one pool.
+// Stores bundles the nine store implementations sharing one pool.
 type Stores struct {
 	Pool           *pgxpool.Pool
 	Repos          *RepoStore
@@ -47,9 +47,10 @@ type Stores struct {
 	Feedback       *FeedbackStore
 	CostCaps       *CostCapStore
 	EmbeddingCache *EmbeddingCache
+	Settings       *SettingsStore
 }
 
-// NewStores constructs all eight stores against a single pool.
+// NewStores constructs all nine stores against a single pool.
 func NewStores(pool *pgxpool.Pool) *Stores {
 	return &Stores{
 		Pool:           pool,
@@ -61,6 +62,7 @@ func NewStores(pool *pgxpool.Pool) *Stores {
 		Feedback:       &FeedbackStore{pool: pool},
 		CostCaps:       &CostCapStore{pool: pool, defaultDailyUsdCap: 5.00, defaultPerPrTokenCap: 30000},
 		EmbeddingCache: &EmbeddingCache{pool: pool},
+		Settings:       &SettingsStore{pool: pool},
 	}
 }
 

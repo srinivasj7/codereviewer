@@ -22,6 +22,28 @@ type Config struct {
 	Rules         RulesConfig         `toml:"rules"`
 	Gateway       GatewayConfig       `toml:"gateway"`
 	Tenant        TenantConfig        `toml:"tenant"`
+	Admin         AdminConfig         `toml:"admin"`
+}
+
+// AdminConfig configures the admin web UI (cmd/admin-ui).
+type AdminConfig struct {
+	ListenAddr        string `toml:"listen_addr"`         // ":8090"
+	Password          string `toml:"password"`            // bootstrap; use ${ADMIN_PASSWORD}
+	SessionSecret     string `toml:"session_secret"`      // HMAC key for the session cookie
+	SessionMinutes    int    `toml:"session_minutes"`     // cookie lifetime; default 60
+	ExportDir         string `toml:"export_dir"`          // where scheduled exports are written; ":memory:" disables disk writes
+	AutoExportEnabled bool   `toml:"auto_export_enabled"` // run the background exporter goroutine
+	AutoExportHours   int    `toml:"auto_export_hours"`   // interval between exports; default 24
+	GithubOAuth       AdminGithubOAuthConfig `toml:"github_oauth"`
+}
+
+// AdminGithubOAuthConfig optionally adds GitHub OAuth as a second login
+// path. Disabled when ClientId is empty.
+type AdminGithubOAuthConfig struct {
+	ClientId     string   `toml:"client_id"`
+	ClientSecret string   `toml:"client_secret"`
+	CallbackURL  string   `toml:"callback_url"`
+	AllowedOrgs  []string `toml:"allowed_orgs"`
 }
 
 // GatewayConfig configures the webhook gateway HTTP listener.
@@ -134,6 +156,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Tenant.Name == "" {
 		c.Tenant.Name = "default"
+	}
+	if c.Admin.ListenAddr == "" {
+		c.Admin.ListenAddr = ":8090"
+	}
+	if c.Admin.SessionMinutes <= 0 {
+		c.Admin.SessionMinutes = 60
+	}
+	if c.Admin.AutoExportHours <= 0 {
+		c.Admin.AutoExportHours = 24
 	}
 	return nil
 }
