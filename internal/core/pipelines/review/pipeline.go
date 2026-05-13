@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"codereviewer/internal/core/budgets"
 	"codereviewer/internal/core/llm"
@@ -15,6 +16,49 @@ import (
 	"codereviewer/internal/ports/store"
 	"codereviewer/internal/schemas"
 )
+
+// stopwatch records per-stage durations. Each Mark snapshots the time
+// since the previous mark and stores it under the stage name. Kv emits
+// them as slog key/value pairs for one-line latency summaries — useful
+// for p95 measurement via log aggregation before OTel ships.
+type stopwatch struct {
+	clock     ports.Clock
+	start     time.Time
+	last      time.Time
+	durations []stageDuration
+}
+
+type stageDuration struct {
+	Name string
+	Ms   int64
+}
+
+func newStopwatch(clock ports.Clock) *stopwatch {
+	now := clock.Now()
+	return &stopwatch{clock: clock, start: now, last: now}
+}
+
+func (s *stopwatch) Mark(stage string) {
+	now := s.clock.Now()
+	s.durations = append(s.durations, stageDuration{
+		Name: stage,
+		Ms:   now.Sub(s.last).Milliseconds(),
+	})
+	s.last = now
+}
+
+func (s *stopwatch) Total() time.Duration {
+	return s.clock.Now().Sub(s.start)
+}
+
+func (s *stopwatch) Kv() []any {
+	out := make([]any, 0, 2+len(s.durations)*2)
+	out = append(out, "total_ms", s.Total().Milliseconds())
+	for _, d := range s.durations {
+		out = append(out, d.Name+"_ms", d.Ms)
+	}
+	return out
+}
 
 // Deps holds the pipeline's collaborators. Construct via NewPipeline.
 type Deps struct {
@@ -68,6 +112,7 @@ func (p *Pipeline) Handle(ctx context.Context, payload []byte, cctx ports.Consum
 
 func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	ref := job.PrRef
+	sw := newStopwatch(p.deps.Clock)
 
 	runId, dup, err := p.deps.PrRuns.Begin(ctx, store.BeginRun{
 		Ref:            ref,
@@ -75,6 +120,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		IdempotencyKey: job.IdempotencyKey(),
 		StartedAt:      p.deps.Clock.Now(),
 	})
+	sw.Mark("begin")
 	if err != nil {
 		return fmt.Errorf("begin run: %w", err)
 	}
@@ -92,11 +138,13 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("get today spend: %w", err))
 	}
+	sw.Mark("budget_check")
 	if budgets.ExceedsDailyCap(spend, costCap.DailyUsdCap) {
 		return p.postBudgetExceeded(ctx, ref, runId)
 	}
 
 	diff, err := p.deps.Vcs.FetchDiff(ctx, ref)
+	sw.Mark("fetch_diff")
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("fetch diff: %w", err))
 	}
@@ -130,6 +178,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		MaxOutputTokens: budgets.MaxOutputTokens(tokenCap),
 		ResponseFormat:  "json",
 	}, llm.DefaultRetryPolicy)
+	sw.Mark("llm_chat")
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("llm chat: %w", err))
 	}
@@ -160,6 +209,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		Comments: botComments,
 	}
 	posted, err := p.deps.Vcs.PostReview(ctx, ref, review)
+	sw.Mark("post_review")
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("post review: %w", err))
 	}
@@ -175,12 +225,13 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	}); err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("update check: %w", err))
 	}
+	sw.Mark("update_check")
 
 	if err := p.deps.CostCaps.RecordSpend(ctx, ref.TenantId, ref.RepoId, resp.CostUsd, p.deps.Clock.Now()); err != nil {
 		p.deps.Obs.Logger.Warn("record spend failed", "err", err.Error())
 	}
 
-	return p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
+	finishErr := p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
 		Status:         store.RunStatusPosted,
 		ModelUsed:      resp.ModelUsed,
 		TokensIn:       resp.TokensIn,
@@ -189,6 +240,20 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		FinishedAt:     p.deps.Clock.Now(),
 		PostedReviewId: posted.ReviewId,
 	})
+	sw.Mark("finish")
+
+	logKv := append([]any{
+		"pr_number", ref.PrNumber,
+		"head_sha", ref.HeadSha,
+		"comments_posted", len(botComments),
+		"tokens_in", resp.TokensIn,
+		"tokens_out", resp.TokensOut,
+		"cost_usd", resp.CostUsd,
+		"model", resp.ModelUsed,
+		"check_conclusion", conclusion,
+	}, sw.Kv()...)
+	p.deps.Obs.Logger.Info("review completed", logKv...)
+	return finishErr
 }
 
 func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runId store.RunId) error {

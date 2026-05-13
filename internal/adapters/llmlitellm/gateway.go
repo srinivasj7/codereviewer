@@ -11,8 +11,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/pkoukk/tiktoken-go"
 	openai "github.com/sashabaranov/go-openai"
 
 	"codereviewer/internal/ports"
@@ -25,6 +27,9 @@ type Gateway struct {
 	primaryModel    string
 	fallbackModel   string
 	embeddingsModel string
+
+	encMu    sync.Mutex
+	encoders map[string]*tiktoken.Tiktoken
 }
 
 // New constructs a Gateway pointed at the LiteLLM URL in cfg.
@@ -37,12 +42,19 @@ func New(cfg schemas.LlmConfig) (*Gateway, error) {
 	}
 	clientCfg := openai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = strings.TrimRight(cfg.GatewayURL, "/") + "/v1"
-	return &Gateway{
+	g := &Gateway{
 		client:          openai.NewClientWithConfig(clientCfg),
 		primaryModel:    cfg.PrimaryModelURL,
 		fallbackModel:   cfg.FallbackModelURL,
 		embeddingsModel: cfg.EmbeddingsURL,
-	}, nil
+		encoders:        make(map[string]*tiktoken.Tiktoken),
+	}
+	// Warm the tokenizer for the primary model so the first review call
+	// doesn't pay the BPE-load latency. Best effort; fallback is len/4.
+	if name := encodingForModel(g.primaryModel); name != "" {
+		_, _ = g.encoderFor(name)
+	}
+	return g, nil
 }
 
 // Chat sends a single-turn chat completion. Temperature is fixed at 0.1
@@ -121,11 +133,57 @@ func (g *Gateway) Embed(ctx context.Context, texts []string, opts ports.EmbedOpt
 	return out, nil
 }
 
-// EstimateTokens is a coarse char/4 approximation. Slice 2 plugs in
-// tiktoken-go for OpenAI-family models and anthropic-tokenizer for
-// Claude-family models, selected by the model arg.
-func (g *Gateway) EstimateTokens(text, _ string) int {
-	return len(text) / 4
+// EstimateTokens returns a token count for the (text, model) pair. For
+// OpenAI families (gpt-4o, gpt-4, gpt-3.5, text-embedding-3), tiktoken
+// returns an exact count. For Claude and unknown models, it falls back
+// to a len/4 approximation; an anthropic-tokenizer integration is a
+// later enhancement.
+func (g *Gateway) EstimateTokens(text, model string) int {
+	if model == "" {
+		model = g.primaryModel
+	}
+	name := encodingForModel(model)
+	if name == "" {
+		return len(text) / 4
+	}
+	enc, err := g.encoderFor(name)
+	if err != nil {
+		return len(text) / 4
+	}
+	return len(enc.Encode(text, nil, nil))
+}
+
+func (g *Gateway) encoderFor(name string) (*tiktoken.Tiktoken, error) {
+	g.encMu.Lock()
+	defer g.encMu.Unlock()
+	if enc, ok := g.encoders[name]; ok {
+		return enc, nil
+	}
+	enc, err := tiktoken.GetEncoding(name)
+	if err != nil {
+		return nil, err
+	}
+	g.encoders[name] = enc
+	return enc, nil
+}
+
+// encodingForModel maps a model name to a tiktoken encoding. Empty
+// string means "no tiktoken encoding applies; use the fallback."
+func encodingForModel(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "gpt-4o"),
+		strings.Contains(m, "o1-"),
+		strings.Contains(m, "o3-"),
+		strings.Contains(m, "o4-"):
+		return "o200k_base"
+	case strings.Contains(m, "gpt-4"),
+		strings.Contains(m, "gpt-3.5"),
+		strings.Contains(m, "text-embedding-3"),
+		strings.Contains(m, "text-embedding-ada"):
+		return "cl100k_base"
+	}
+	return ""
 }
 
 func (g *Gateway) modelForTier(tier ports.LlmTier) string {

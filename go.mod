@@ -17,12 +17,14 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/pgvector/pgvector-go v0.3.0
+	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 )
 
 require (
+	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/go-github/v84 v84.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
