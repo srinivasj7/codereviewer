@@ -12,9 +12,13 @@ go.work.sum
 
 # Local config
 *.local.toml
-dev.toml
 .env
 .env.*
+!.env.example
+
+# Secrets
+*.pem
+!*.pem.example
 
 # IDE
 .idea/

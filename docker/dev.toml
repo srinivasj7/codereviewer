@@ -1,0 +1,44 @@
+# Dev config for the docker-compose stack. Service hostnames match the
+# names defined in docker-compose.yml. Secrets are pulled from .env via
+# the env-var expansion done by internal/config/load.go.
+
+[vcs]
+provider         = "github"
+app_id           = "${GITHUB_APP_ID}"
+installation_id  = "${GITHUB_INSTALLATION_ID}"
+private_key_path = "/run/secrets/github-app-key.pem"
+webhook_secret   = "${GITHUB_WEBHOOK_SECRET}"
+
+[message_bus]
+type                = "nats"
+review_queue_url    = "nats://nats:4222"
+index_queue_url     = "nats://nats:4222"
+feedback_queue_url  = "nats://nats:4222"
+backfill_queue_url  = "nats://nats:4222"
+
+[store]
+type         = "postgres"
+postgres_url = "postgres://postgres:dev@postgres:5432/codereviewer?sslmode=disable"
+
+[llm]
+provider           = "litellm"
+gateway_url        = "http://litellm:4000"
+primary_model_url  = "primary"
+fallback_model_url = "fallback"
+embeddings_url     = "embeddings"
+api_key            = "${LITELLM_MASTER_KEY}"
+per_pr_token_cap   = 30000
+
+[secrets]
+provider = "env"
+
+[observability]
+sink         = "stdout"
+service_name = "codereviewer"
+
+[cost]
+daily_usd_cap_default = 5.00
+
+[rules]
+git_url = ""
+branch  = "main"

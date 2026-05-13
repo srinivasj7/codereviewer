@@ -1,0 +1,30 @@
+# LiteLLM proxy config. The three model_names referenced here
+# (primary, fallback, embeddings) match dev.toml so the Go gateway
+# can route by tier without knowing the upstream provider details.
+#
+# Swap the litellm_params.model values to use a different provider
+# (e.g., "anthropic/claude-sonnet-4-6", "azure/gpt-4o").
+
+model_list:
+  - model_name: primary
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: fallback
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: embeddings
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 60
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
