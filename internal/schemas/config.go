@@ -24,10 +24,12 @@ type Config struct {
 
 // VcsConfig configures the version-control adapter.
 type VcsConfig struct {
-	Provider      string `toml:"provider"` // github | memory
-	AppId         string `toml:"app_id"`
-	PrivateKey    string `toml:"private_key"`
-	WebhookSecret string `toml:"webhook_secret"`
+	Provider       string `toml:"provider"` // github | memory
+	AppId          string `toml:"app_id"`
+	InstallationId string `toml:"installation_id"`
+	PrivateKey     string `toml:"private_key"`      // inline PEM (use ${ENV} expansion)
+	PrivateKeyPath string `toml:"private_key_path"` // alternative to inline; preferred
+	WebhookSecret  string `toml:"webhook_secret"`
 }
 
 // MessageBusConfig configures the message bus adapter.
