@@ -8,6 +8,7 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/pgvector/pgvector-go v0.3.0
+	github.com/sashabaranov/go-openai v1.41.2
 )
 
 require (
