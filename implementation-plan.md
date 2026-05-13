@@ -40,7 +40,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | Slice | Status | Notes |
 |---|---|---|
 | 0. Skeleton + contracts + smoke test | **Complete** | `go build`, `go vet`, `go test` all green. 3 test packages (llm, prompt, smoke) covering drop-order, LLM parse, pipeline success/failure/budget/dedup/fail-open paths. |
-| 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack (postgres+pgvector, NATS, LiteLLM, migrate, gateway, both workers). Slice 0 tests still green; Docker daemon-based end-to-end verification deferred to user. |
+| 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack. Verified: all 4 Go images build (including indexer with CGO+tree-sitter), postgres+pgvector and NATS come up healthy, `docker compose run --rm migrate` applies all 4 migrations cleanly (11 tables created in the schema). Slice 0 tests still green. |
 | 2. Naive review pipeline | Not started | |
 | 3. Retrieval + backfill | Not started | |
 | 4. Rules + feedback + observability | Not started | |
