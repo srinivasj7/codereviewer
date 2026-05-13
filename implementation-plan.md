@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 0 planned, awaiting build approval
+**Status:** Slice 0 complete; slice 1 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -39,7 +39,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 
 | Slice | Status | Notes |
 |---|---|---|
-| 0. Skeleton + contracts + smoke test | Planned, awaiting approval | This document |
+| 0. Skeleton + contracts + smoke test | **Complete** | `go build`, `go vet`, `go test` all green. 3 test packages (llm, prompt, smoke) covering drop-order, LLM parse, pipeline success/failure/budget/dedup/fail-open paths. |
 | 1. Webhook + indexer (local infra) | Not started | |
 | 2. Naive review pipeline | Not started | |
 | 3. Retrieval + backfill | Not started | |
@@ -87,14 +87,16 @@ Idiomatic Go prefers small, consumer-defined interfaces declared next to the con
 
 ## Definition of done
 
-- [ ] `go build ./...`, `go vet ./...`, `go test ./...`, and `golangci-lint run` all green on a clean checkout
-- [ ] Smoke test boots review-worker against in-memory adapters, publishes a fake `ReviewJob`, asserts:
+- [x] `go build ./...`, `go vet ./...`, `go test ./...` all green on a clean checkout
+- [ ] `golangci-lint run` — config in `.golangci.yml`; CI integration deferred to slice 1
+- [x] Smoke test boots review-worker against in-memory adapters, publishes a fake `ReviewJob`, asserts:
   - `FakeVcs.PostReview` was called with a well-formed payload
   - `FakeVcs.UpdateCheck` was called with `conclusion: "success"`
   - `FakePrRunStore` has a `posted` row with `TokensIn > 0`, `CostUsd > 0`
-- [ ] Budget-exceeded test: with `dailyUsdCap = 0`, pipeline short-circuits, LLM is never called, neutral comment posted
-- [ ] Drop-order test: with tight `perPrTokenCap`, past reviews → related code → rules drop in that order; **diff is never trimmed**
-- [ ] `go-cleanarch` (or `import-boss`) enforces no `internal/core → internal/adapters` imports
+- [x] Budget-exceeded test: with `dailyUsdCap = 0`, pipeline short-circuits, LLM is never called, neutral comment posted
+- [x] Drop-order test: with tight `perPrTokenCap`, past reviews → related code → rules drop in that order; **diff is never trimmed**
+- [ ] `go-cleanarch` enforces no `internal/core → internal/adapters` imports — boundary respected manually; tool wiring deferred to slice 1 CI
+- [x] Bonus: high-severity (bug/security) comment fails status check; bus-level idempotency dedups duplicate jobs; LLM outage triggers fail-open path with `pr_runs.status = failed-open`
 
 ## Repository layout
 
@@ -500,6 +502,12 @@ Conventions:
 - No tree-sitter; `FakeParser` splits content by `\n\n` for tests.
 - No Docker, no Terraform, no CI workflow files (those arrive with slice 1).
 - No `sqlc generate` run yet — `internal/db/sqlc.yaml` is committed but `query/*.sql` is empty.
+
+## Minor deviations from the plan (slice 0)
+
+- **`internal/config/pick.go` consolidated into `internal/boot/wire.go`.** Originally listed in both places; keeping it only in `boot` avoids the circular import risk (config would otherwise depend on adapters). `internal/config` is now pure loading + validation; `internal/boot` is the only package that imports adapters.
+- **Stub adapter directories (`vcsgithub`, `bussqs`, `busnats`, `llmlitellm`, `storepostgres`, `parsertreesitter`, `obsotel`, `rulessourcegit`) not created.** Empty Go packages need a `doc.go`; cheaper to create them when their first real code lands. `boot.Pick*` returns descriptive "not yet implemented" errors for these config values today.
+- **Makefile split `test` and `test-race`.** Go's race detector requires CGO; on Windows without a C toolchain that breaks the default. `test` runs without race; CI on Linux uses `test-race`.
 
 ---
 
