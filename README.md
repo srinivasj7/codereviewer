@@ -111,9 +111,9 @@ docker compose up admin-ui   # http://localhost:8090
 What you can do from the UI:
 - **Sign in** with the admin password (or GitHub OAuth if you've configured `[admin.github_oauth]` and registered an OAuth app).
 - **View the dashboard** — current overlay values, table counts, links to import/export.
-- **Edit runtime settings** — `rules.git_url`, `cost.daily_usd_cap_default`, `llm.primary_model_url`, etc. These persist in the `app_settings` table and overlay the TOML defaults when workers restart. Bootstrap config (DB URL, secrets provider, bus URL) stays in TOML — by design.
+- **Edit runtime settings** — `rules.git_url`, `cost.daily_usd_cap_default`, `llm.primary_model_url`, etc. These persist in the `app_settings` table and overlay the TOML defaults when workers restart. Bootstrap config (DB URL, secrets provider, bus URL) stays in TOML — by design. Any string setting may reference an env var via `${VAR}` and will resolve per-environment at worker boot — handy when the same export targets both compose and EC2 (e.g. set `observability.otlp_endpoint` to `${OTEL_ENDPOINT}`).
 - **Export & import config** — download the current settings as TOML, upload a previously-saved file to restore. Secrets are never included.
-- **Export & import durable data** — download `code_chunks`, `rules`, and `review_comments` as one JSON file (embeddings included). Re-import upserts by primary key. `pr_runs`, caches, and tenants are intentionally excluded.
+- **Export & import durable data** — download `tenants`, `repos`, `code_chunks`, `rules`, and `review_comments` as one JSON file (embeddings included). Parent tables are bundled so a cold-start import on a fresh database satisfies foreign keys before any webhook traffic. Re-import upserts by primary key. `pr_runs`, caches, and `feedback_events` are intentionally excluded.
 - **Automatic backups** — set `[admin].auto_export_enabled = true` and `[admin].export_dir = "/app/exports"` (volume mount). The admin process writes a timestamped TOML + JSON pair every `auto_export_hours`.
 
 > Workers don't watch `app_settings` live. After saving a setting, `docker compose restart review-worker indexer-worker feedback-worker webhook-gateway` to apply.

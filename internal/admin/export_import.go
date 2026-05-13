@@ -39,16 +39,37 @@ const (
 	SnapshotData   SnapshotKind = "data"
 )
 
-// DataSnapshot is the export payload for the selective DB dump. Only
-// the durable retrieval-relevant tables are included; pr_runs (audit),
-// caches, and tenants/repos are out of scope.
+// DataSnapshot is the export payload for the selective DB dump. The
+// retrieval-relevant tables (code_chunks, rules, review_comments) are
+// the durable payload. tenants and repos are included as parent rows
+// so a cold-start import into a fresh database satisfies foreign-key
+// constraints before the gateway has a chance to auto-register them.
+// pr_runs (audit), caches, and feedback_events are still out of scope.
 type DataSnapshot struct {
-	Kind       SnapshotKind          `json:"kind"`
-	Version    int                   `json:"version"`
-	ExportedAt time.Time             `json:"exported_at"`
-	CodeChunks []codeChunkRow        `json:"code_chunks"`
-	Rules      []ruleRow             `json:"rules"`
-	Comments   []commentRow          `json:"review_comments"`
+	Kind       SnapshotKind   `json:"kind"`
+	Version    int            `json:"version"`
+	ExportedAt time.Time      `json:"exported_at"`
+	Tenants    []tenantRow    `json:"tenants"`
+	Repos      []repoRow      `json:"repos"`
+	CodeChunks []codeChunkRow `json:"code_chunks"`
+	Rules      []ruleRow      `json:"rules"`
+	Comments   []commentRow   `json:"review_comments"`
+}
+
+type tenantRow struct {
+	TenantId string `json:"tenant_id"`
+	Name     string `json:"name"`
+}
+
+type repoRow struct {
+	RepoId             string `json:"repo_id"`
+	TenantId           string `json:"tenant_id"`
+	Owner              string `json:"owner"`
+	Name               string `json:"name"`
+	DefaultBranch      string `json:"default_branch"`
+	IndexedCommitSha   string `json:"indexed_commit_sha,omitempty"`
+	BackfillWindowDays int    `json:"backfill_window_days"`
+	Enabled            bool   `json:"enabled"`
 }
 
 type codeChunkRow struct {
@@ -95,13 +116,27 @@ type commentRow struct {
 	Embedding     []float32 `json:"embedding,omitempty"`
 }
 
-// ExportData reads the three included tables and returns a snapshot.
+// ExportData reads the included tables and returns a snapshot.
+// Order matters for the eventual import: tenants first, then repos
+// (FK on tenant_id), then code_chunks/comments/rules.
 func ExportData(ctx context.Context, anyPool any) (DataSnapshot, error) {
 	pool, ok := anyPool.(*pgxpool.Pool)
 	if !ok {
 		return DataSnapshot{}, errors.New("export: pool is not a *pgxpool.Pool")
 	}
 	snap := DataSnapshot{Kind: SnapshotData, Version: 1, ExportedAt: time.Now().UTC()}
+
+	tenants, err := exportTenants(ctx, pool)
+	if err != nil {
+		return snap, fmt.Errorf("export tenants: %w", err)
+	}
+	snap.Tenants = tenants
+
+	repos, err := exportRepos(ctx, pool)
+	if err != nil {
+		return snap, fmt.Errorf("export repos: %w", err)
+	}
+	snap.Repos = repos
 
 	chunks, err := exportCodeChunks(ctx, pool)
 	if err != nil {
@@ -121,6 +156,46 @@ func ExportData(ctx context.Context, anyPool any) (DataSnapshot, error) {
 	}
 	snap.Comments = comments
 	return snap, nil
+}
+
+func exportTenants(ctx context.Context, pool *pgxpool.Pool) ([]tenantRow, error) {
+	rows, err := pool.Query(ctx, `SELECT tenant_id, name FROM tenants ORDER BY tenant_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tenantRow
+	for rows.Next() {
+		var t tenantRow
+		if err := rows.Scan(&t.TenantId, &t.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func exportRepos(ctx context.Context, pool *pgxpool.Pool) ([]repoRow, error) {
+	rows, err := pool.Query(ctx, `
+SELECT repo_id, tenant_id, owner, name, default_branch,
+       COALESCE(indexed_commit_sha,''), COALESCE(backfill_window_days, 270),
+       COALESCE(enabled, true)
+FROM repos ORDER BY repo_id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []repoRow
+	for rows.Next() {
+		var r repoRow
+		if err := rows.Scan(&r.RepoId, &r.TenantId, &r.Owner, &r.Name, &r.DefaultBranch,
+			&r.IndexedCommitSha, &r.BackfillWindowDays, &r.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func exportCodeChunks(ctx context.Context, pool *pgxpool.Pool) ([]codeChunkRow, error) {
@@ -217,6 +292,36 @@ func ImportData(ctx context.Context, anyPool any, snap DataSnapshot) error {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// tenants and repos must land first so the FKs on code_chunks /
+	// review_comments are satisfied. Both are upserts so re-running an
+	// import on a partially-populated DB is safe.
+	for _, t := range snap.Tenants {
+		_, err := tx.Exec(ctx, `
+INSERT INTO tenants (tenant_id, name) VALUES ($1, $2)
+ON CONFLICT (tenant_id) DO UPDATE SET name = EXCLUDED.name
+`, t.TenantId, t.Name)
+		if err != nil {
+			return fmt.Errorf("upsert tenant %s: %w", t.TenantId, err)
+		}
+	}
+
+	for _, r := range snap.Repos {
+		_, err := tx.Exec(ctx, `
+INSERT INTO repos (repo_id, tenant_id, owner, name, default_branch,
+                   indexed_commit_sha, backfill_window_days, enabled)
+VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8)
+ON CONFLICT (repo_id) DO UPDATE SET
+  default_branch        = EXCLUDED.default_branch,
+  indexed_commit_sha    = EXCLUDED.indexed_commit_sha,
+  backfill_window_days  = EXCLUDED.backfill_window_days,
+  enabled               = EXCLUDED.enabled
+`, r.RepoId, r.TenantId, r.Owner, r.Name, r.DefaultBranch,
+			r.IndexedCommitSha, r.BackfillWindowDays, r.Enabled)
+		if err != nil {
+			return fmt.Errorf("upsert repo %s: %w", r.RepoId, err)
+		}
+	}
 
 	for _, c := range snap.CodeChunks {
 		_, err := tx.Exec(ctx, `
@@ -405,7 +510,9 @@ func (s *Server) handleImportDbPOST(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, "import", err)
 		return
 	}
-	s.renderOk(w, r, "import", fmt.Sprintf("Imported %d code_chunks, %d rules, %d review_comments.",
+	s.renderOk(w, r, "import", fmt.Sprintf(
+		"Imported %d tenants, %d repos, %d code_chunks, %d rules, %d review_comments.",
+		len(snap.Tenants), len(snap.Repos),
 		len(snap.CodeChunks), len(snap.Rules), len(snap.Comments)))
 }
 

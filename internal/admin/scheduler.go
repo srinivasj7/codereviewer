@@ -85,6 +85,8 @@ func (a *AutoExporter) exportOnce(ctx context.Context) error {
 	a.srv.deps.Obs.Logger.Info("auto-export written",
 		"config", cfgPath,
 		"data", dataPath,
+		"tenants", len(dataSnap.Tenants),
+		"repos", len(dataSnap.Repos),
 		"code_chunks", len(dataSnap.CodeChunks),
 		"rules", len(dataSnap.Rules),
 		"review_comments", len(dataSnap.Comments),

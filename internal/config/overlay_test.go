@@ -70,6 +70,23 @@ func TestApplyOverlay_ValidatesAfter(t *testing.T) {
 	require.Error(t, err, "validate must reject unknown sink")
 }
 
+func TestApplyOverlay_EnvExpansion(t *testing.T) {
+	cfg := baseConfig()
+	settings := fakes.NewSettingsStore()
+	ctx := context.Background()
+
+	// Set OTLP endpoint as an env-var reference; the actual value comes
+	// from the process env at apply time.
+	t.Setenv("TEST_OTEL_ENDPOINT", "otel.prod.example:4318")
+	require.NoError(t, settings.Set(ctx, "observability.otlp_endpoint", "${TEST_OTEL_ENDPOINT}", "admin"))
+	require.NoError(t, settings.Set(ctx, "rules.git_url", "${TEST_RULES_URL}", "admin"))
+	// TEST_RULES_URL is not set — should expand to empty, leaving the field empty.
+
+	require.NoError(t, config.ApplyOverlay(ctx, cfg, settings))
+	require.Equal(t, "otel.prod.example:4318", cfg.Observability.OtlpEndpoint)
+	require.Equal(t, "", cfg.Rules.GitURL)
+}
+
 func TestApplyOverlay_NilStoreIsNoOp(t *testing.T) {
 	cfg := baseConfig()
 	orig := cfg.Rules.GitURL

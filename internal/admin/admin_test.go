@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -230,6 +231,36 @@ func TestImportConfig_RejectsUnknownKey(t *testing.T) {
 func TestImportData_RejectsWrongKind(t *testing.T) {
 	err := ImportData(nil, nil, DataSnapshot{Kind: SnapshotConfig})
 	require.Error(t, err)
+}
+
+func TestDataSnapshot_RoundTripsParentTables(t *testing.T) {
+	// Construct a snapshot and marshal/unmarshal it through JSON to
+	// confirm the parent-table rows survive serialization in the shape
+	// the import path expects.
+	snap := DataSnapshot{
+		Kind:    SnapshotData,
+		Version: 1,
+		Tenants: []tenantRow{{TenantId: "default-tenant", Name: "default"}},
+		Repos: []repoRow{{
+			RepoId: "octo/repo", TenantId: "default-tenant",
+			Owner: "octo", Name: "repo", DefaultBranch: "main",
+			BackfillWindowDays: 270, Enabled: true,
+		}},
+		Comments: []commentRow{{
+			CommentId: "c1", TenantId: "default-tenant", RepoId: "octo/repo",
+			PrNumber: 1, Source: "human", CommentText: "x", Outcome: "pending",
+		}},
+	}
+	b, err := json.Marshal(snap)
+	require.NoError(t, err)
+	var got DataSnapshot
+	require.NoError(t, json.Unmarshal(b, &got))
+	require.Len(t, got.Tenants, 1)
+	require.Equal(t, "default-tenant", got.Tenants[0].TenantId)
+	require.Len(t, got.Repos, 1)
+	require.Equal(t, "octo/repo", got.Repos[0].RepoId)
+	require.Equal(t, 270, got.Repos[0].BackfillWindowDays)
+	require.True(t, got.Repos[0].Enabled)
 }
 
 func TestVectorLiteral(t *testing.T) {

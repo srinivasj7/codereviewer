@@ -2,6 +2,7 @@
 <section>
 <h1>Settings</h1>
 <p class="muted">These values override the TOML defaults for the next worker restart. Workers re-read at startup; you may need to restart the workers (or the docker-compose services) to apply changes.</p>
+<p class="muted">Use <code>${VAR}</code> in any string value to defer to an environment variable at boot — useful for endpoints that differ between dev and production (e.g. <code>${OTEL_ENDPOINT}</code>).</p>
 <form method="POST" action="/settings">
 <table>
 <thead><tr><th style="width: 22rem;">Key</th><th>Value</th></tr></thead>

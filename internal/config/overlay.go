@@ -45,6 +45,11 @@ func IsOverlayKey(key string) bool {
 // each present value into cfg. Empty / absent settings leave the TOML
 // default in place. Returns the same config (mutated) for chaining.
 //
+// String values are passed through ExpandEnv so an overlay value of
+// `${OTEL_ENDPOINT}` resolves per-environment — useful when the same
+// export TOML moves between docker-compose (where `otel-collector` is
+// a service hostname) and EC2 (where it isn't).
+//
 // Parse failures on numeric/boolean overlays log nothing here — they
 // surface as the original TOML value plus an error returned to the
 // caller, so admins fixing a typo see it immediately.
@@ -60,8 +65,9 @@ func ApplyOverlay(ctx context.Context, cfg *schemas.Config, settings store.Setti
 		if !IsOverlayKey(s.Key) {
 			continue
 		}
-		if err := applyOne(cfg, s.Key, s.Value); err != nil {
-			return fmt.Errorf("apply overlay %s=%q: %w", s.Key, s.Value, err)
+		v := ExpandEnv(s.Value)
+		if err := applyOne(cfg, s.Key, v); err != nil {
+			return fmt.Errorf("apply overlay %s=%q: %w", s.Key, v, err)
 		}
 	}
 	return cfg.Validate()
