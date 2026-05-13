@@ -5,7 +5,8 @@ GO ?= go
 help:
 	@echo "Available targets:"
 	@echo "  build         - Compile all packages and binaries"
-	@echo "  test          - Run unit tests with race detector"
+	@echo "  test          - Run unit tests"
+	@echo "  test-race     - Run unit tests with the race detector (requires CGO)"
 	@echo "  typecheck     - Run go vet"
 	@echo "  lint          - Run golangci-lint"
 	@echo "  tidy          - Run go mod tidy"
@@ -19,7 +20,11 @@ build:
 	$(GO) build ./...
 
 test:
-	$(GO) test -race ./...
+	$(GO) test ./...
+
+# test-race requires CGO (a C toolchain). Use in CI on Linux.
+test-race:
+	CGO_ENABLED=1 $(GO) test -race ./...
 
 typecheck:
 	$(GO) vet ./...
