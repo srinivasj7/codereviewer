@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 0 complete; slice 1 next
+**Status:** Slice 1 complete; slice 2 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -40,7 +40,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | Slice | Status | Notes |
 |---|---|---|
 | 0. Skeleton + contracts + smoke test | **Complete** | `go build`, `go vet`, `go test` all green. 3 test packages (llm, prompt, smoke) covering drop-order, LLM parse, pipeline success/failure/budget/dedup/fail-open paths. |
-| 1. Webhook + indexer (local infra) | Not started | |
+| 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack (postgres+pgvector, NATS, LiteLLM, migrate, gateway, both workers). Slice 0 tests still green; Docker daemon-based end-to-end verification deferred to user. |
 | 2. Naive review pipeline | Not started | |
 | 3. Retrieval + backfill | Not started | |
 | 4. Rules + feedback + observability | Not started | |
@@ -502,6 +502,19 @@ Conventions:
 - No tree-sitter; `FakeParser` splits content by `\n\n` for tests.
 - No Docker, no Terraform, no CI workflow files (those arrive with slice 1).
 - No `sqlc generate` run yet — `internal/db/sqlc.yaml` is committed but `query/*.sql` is empty.
+
+## Minor deviations from the plan (slice 1)
+
+- **sqlc deferred.** Hand-written pgx queries in `storepostgres/`. Rationale: pgvector cosine search with conditional same-file boost and outcome-weighted re-ranking is cleaner hand-written than generated. `sqlc.yaml` is committed for slice 2+ if the CRUD surface grows enough to justify codegen.
+- **Tree-sitter under CGO build tags.** `parsertreesitter/parser_cgo.go` is `//go:build cgo` (real impl); `parser_nocgo.go` is `//go:build !cgo` (stub that errors). `go build ./...` works on Windows without a C toolchain; the Dockerized indexer always has CGO. `go.mod` needs `exclude github.com/smacker/go-tree-sitter/javascript v0.0.1` to disambiguate the package from the smacker repo's parent module.
+- **`go mod tidy` with CGO disabled prunes tree-sitter + goose.** Run with `CGO_ENABLED=1` when adjusting deps (or in Docker/Linux/macOS).
+- **Single GitHub App installation per deployment.** `vcs.installation_id` is fixed in config. Multi-installation routing is a slice 2 enhancement.
+- **`vcs.repo_id` shape = "owner/name".** Carried as an opaque string through the system; `vcsgithub` splits when calling REST. A more abstract repo identifier waits for slice 2.
+- **Cost computed client-side from a price table** in `llmlitellm/`. Slice 2 can read `x-litellm-response-cost` from LiteLLM response headers for exact values (go-openai doesn't expose headers today).
+- **EstimateTokens is `len(text)/4`** across all adapters. Per-provider tokenizers (tiktoken-go, anthropic-tokenizer) arrive with slice 2.
+- **`webhook-gateway` hardcodes `:8080`.** Configurable in slice 2.
+- **`defaultTenantId = "default-tenant"` in the gateway.** Single-tenant deploy; multi-tenant routing waits.
+- **No adapter contract tests** (testcontainers-based). Slice 0 fakes-based tests still cover the pipeline logic. Real-DB integration tests can come with slice 2.
 
 ## Minor deviations from the plan (slice 0)
 
