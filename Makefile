@@ -26,6 +26,14 @@ test:
 test-race:
 	CGO_ENABLED=1 $(GO) test -race ./...
 
+# test-integration runs adapter tests against external infrastructure
+# brought up by docker compose. Skipped when TESTS_POSTGRES_URL is unset.
+test-integration:
+	@command -v docker >/dev/null 2>&1 || { echo "docker required for integration tests"; exit 1; }
+	docker compose up -d postgres
+	@TESTS_POSTGRES_URL=$${TESTS_POSTGRES_URL:-postgres://postgres:dev@localhost:5432/codereviewer?sslmode=disable} \
+	  $(GO) test -count=1 ./internal/adapters/storepostgres/...
+
 typecheck:
 	$(GO) vet ./...
 

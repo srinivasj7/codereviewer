@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 1 complete; slice 2 next
+**Status:** Slice 2 complete; slice 3 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -41,7 +41,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 |---|---|---|
 | 0. Skeleton + contracts + smoke test | **Complete** | `go build`, `go vet`, `go test` all green. 3 test packages (llm, prompt, smoke) covering drop-order, LLM parse, pipeline success/failure/budget/dedup/fail-open paths. |
 | 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack. Verified: all 4 Go images build (including indexer with CGO+tree-sitter), postgres+pgvector and NATS come up healthy, `docker compose run --rm migrate` applies all 4 migrations cleanly (11 tables created in the schema). Slice 0 tests still green. |
-| 2. Naive review pipeline | Not started | |
+| 2. Naive review pipeline | **Complete** | RepoStore + auto-registration on every webhook, migration 005 fixes id-type mismatch (UUID → TEXT), tiktoken-based token estimation for OpenAI models, per-stage latency stopwatch in the review pipeline (greppable p95 line), configurable gateway listen address, /review slash command, storepostgres contract tests (6 tests, external Postgres via TESTS_POSTGRES_URL — no testcontainers dep per library policy). Verified: `go vet/build/test ./...` clean; `make test-integration` passes against `docker compose up postgres`. |
 | 3. Retrieval + backfill | Not started | |
 | 4. Rules + feedback + observability | Not started | |
 | 5. EC2 deploy profile | Not started | |
@@ -502,6 +502,14 @@ Conventions:
 - No tree-sitter; `FakeParser` splits content by `\n\n` for tests.
 - No Docker, no Terraform, no CI workflow files (those arrive with slice 1).
 - No `sqlc generate` run yet — `internal/db/sqlc.yaml` is committed but `query/*.sql` is empty.
+
+## Minor deviations from the plan (slice 2)
+
+- **No testcontainers-go.** The plan originally suggested testcontainers; per the library policy ([see memory](file:///C:/Users/srinu/.claude/projects/D--code-codereviewer/memory/feedback_library_policy.md)), test infra is precisely the kind of dep we own ourselves. Contract tests now read `TESTS_POSTGRES_URL` from the environment; `make test-integration` is the convenience target that brings up Postgres via the existing `docker-compose.yml`. Same coverage, zero new deps.
+- **`pkoukk/tiktoken-go` kept** with a documented security rationale: single-purpose, deterministic, no network after BPE load, widely deployed. Anthropic-tokenizer integration when a Claude model becomes primary.
+- **Migration 005 converts UUID → TEXT** for `tenant_id` and `repo_id` columns across all 8 affected tables. Slice 1's "default-tenant" and "owner/name" strings would have failed UUID parsing on first write; no production data existed yet so this is forward-only with no compensating migration needed.
+- **`make test-race` still requires CGO** (Windows users without a C toolchain can't run it locally; CI runs it on Linux). Unchanged from slice 0.
+- **`x-litellm-response-cost` from response headers** still deferred. Client-side cost via the price table in `llmlitellm` is exact enough for budget caps; precise per-request cost arrives with the OTel instrumentation in slice 4.
 
 ## Minor deviations from the plan (slice 1)
 
