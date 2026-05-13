@@ -1,0 +1,245 @@
+// Package review implements the per-PR review pipeline (design §6.1).
+// It is constructed once at boot with the appropriate ports wired in and
+// then invoked via Handle for each ReviewJob delivered by the bus.
+package review
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"codereviewer/internal/core/budgets"
+	"codereviewer/internal/core/llm"
+	"codereviewer/internal/core/prompt"
+	"codereviewer/internal/ports"
+	"codereviewer/internal/ports/store"
+	"codereviewer/internal/schemas"
+)
+
+// Deps holds the pipeline's collaborators. Construct via NewPipeline.
+type Deps struct {
+	Vcs            ports.VcsSource
+	Llm            ports.LlmGateway
+	Clock          ports.Clock
+	Obs            ports.Obs
+	CodeChunks     store.CodeChunkStore
+	Comments       store.CommentStore
+	Rules          store.RuleStore
+	PrRuns         store.PrRunStore
+	CostCaps       store.CostCapStore
+	EmbeddingCache store.EmbeddingCache
+	TokenCap       int    // 0 = default
+	SystemPrompt   string // empty = default
+}
+
+// Pipeline is the per-PR review use case.
+type Pipeline struct {
+	deps Deps
+}
+
+// NewPipeline applies defaults and returns a ready-to-run pipeline.
+func NewPipeline(deps Deps) *Pipeline {
+	if deps.TokenCap <= 0 {
+		deps.TokenCap = budgets.DefaultPerPrTokenCap
+	}
+	if deps.SystemPrompt == "" {
+		deps.SystemPrompt = prompt.DefaultSystemPrompt
+	}
+	return &Pipeline{deps: deps}
+}
+
+// Handle is the bus consumer entry point. It MUST ack or nack the
+// delivery exactly once before returning.
+func (p *Pipeline) Handle(ctx context.Context, payload []byte, cctx ports.ConsumeCtx) error {
+	var job schemas.ReviewJob
+	if err := json.Unmarshal(payload, &job); err != nil {
+		_ = cctx.Nack(fmt.Sprintf("invalid review job: %v", err))
+		return fmt.Errorf("unmarshal review job: %w", err)
+	}
+	if err := p.process(ctx, job); err != nil {
+		p.deps.Obs.Logger.Error("review pipeline failed",
+			"err", err.Error(),
+			"pr_number", job.PrRef.PrNumber,
+			"head_sha", job.PrRef.HeadSha,
+		)
+	}
+	return cctx.Ack()
+}
+
+func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
+	ref := job.PrRef
+
+	runId, dup, err := p.deps.PrRuns.Begin(ctx, store.BeginRun{
+		Ref:            ref,
+		Trigger:        job.Trigger,
+		IdempotencyKey: job.IdempotencyKey(),
+		StartedAt:      p.deps.Clock.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("begin run: %w", err)
+	}
+	if dup {
+		p.deps.Obs.Logger.Info("duplicate review job; skipping",
+			"pr_number", ref.PrNumber, "head_sha", ref.HeadSha)
+		return nil
+	}
+
+	costCap, err := p.deps.CostCaps.GetEffective(ctx, ref.TenantId, ref.RepoId)
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("get cost cap: %w", err))
+	}
+	spend, err := p.deps.CostCaps.TodaySpend(ctx, ref.TenantId, ref.RepoId, "UTC")
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("get today spend: %w", err))
+	}
+	if budgets.ExceedsDailyCap(spend, costCap.DailyUsdCap) {
+		return p.postBudgetExceeded(ctx, ref, runId)
+	}
+
+	diff, err := p.deps.Vcs.FetchDiff(ctx, ref)
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("fetch diff: %w", err))
+	}
+
+	// Slice 0: retrieval is intentionally empty. Slice 3 plumbs the
+	// CodeRetriever / CommentRetriever / RuleRetriever fields onto Deps
+	// and uses them here.
+	var related, pastReviews, ruleStrings []string
+
+	tokenCap := p.deps.TokenCap
+	if costCap.PerPrTokenCap > 0 && costCap.PerPrTokenCap < tokenCap {
+		tokenCap = costCap.PerPrTokenCap
+	}
+	assembled := prompt.Assemble(prompt.Inputs{
+		SystemPrompt:       p.deps.SystemPrompt,
+		Diff:               diff.Content,
+		RelatedCode:        related,
+		PastReviews:        pastReviews,
+		Rules:              ruleStrings,
+		ClosingInstruction: prompt.DefaultClosingInstruction,
+	}, tokenCap, func(s string) int { return p.deps.Llm.EstimateTokens(s, "") })
+
+	if assembled.DiffOverflow {
+		p.deps.Obs.Logger.Warn("diff exceeds token cap; chunking not yet implemented",
+			"pr_number", ref.PrNumber, "tokens_estimated", assembled.TokensEstimated)
+	}
+
+	resp, err := llm.ChatWithRetry(ctx, p.deps.Llm.Chat, ports.ChatRequest{
+		SystemPrompt:    assembled.SystemPrompt,
+		UserPrompt:      assembled.UserPrompt,
+		MaxOutputTokens: budgets.MaxOutputTokens(tokenCap),
+		ResponseFormat:  "json",
+	}, llm.DefaultRetryPolicy)
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("llm chat: %w", err))
+	}
+
+	raw, err := llm.ParseOutput(resp.Content)
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("parse llm output: %w", err))
+	}
+
+	botComments := make([]ports.BotComment, 0, len(raw))
+	hasHighSeverity := false
+	for _, c := range raw {
+		botComments = append(botComments, ports.BotComment{
+			File:      c.File,
+			StartLine: c.StartLine,
+			EndLine:   c.EndLine,
+			Body:      c.Comment,
+			Category:  c.Category,
+			Severity:  c.Severity,
+		})
+		if c.Category == "bug" || c.Category == "security" {
+			hasHighSeverity = true
+		}
+	}
+
+	review := ports.ReviewPayload{
+		Body:     summaryBody(len(botComments), hasHighSeverity),
+		Comments: botComments,
+	}
+	posted, err := p.deps.Vcs.PostReview(ctx, ref, review)
+	if err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("post review: %w", err))
+	}
+
+	conclusion := "success"
+	if hasHighSeverity {
+		conclusion = "failure"
+	}
+	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+		Name:       "code-review-bot/review",
+		Conclusion: conclusion,
+		Summary:    fmt.Sprintf("%d comments posted", len(botComments)),
+	}); err != nil {
+		return p.failOpen(ctx, ref, runId, fmt.Errorf("update check: %w", err))
+	}
+
+	if err := p.deps.CostCaps.RecordSpend(ctx, ref.TenantId, ref.RepoId, resp.CostUsd, p.deps.Clock.Now()); err != nil {
+		p.deps.Obs.Logger.Warn("record spend failed", "err", err.Error())
+	}
+
+	return p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
+		Status:         store.RunStatusPosted,
+		ModelUsed:      resp.ModelUsed,
+		TokensIn:       resp.TokensIn,
+		TokensOut:      resp.TokensOut,
+		CostUsd:        resp.CostUsd,
+		FinishedAt:     p.deps.Clock.Now(),
+		PostedReviewId: posted.ReviewId,
+	})
+}
+
+func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runId store.RunId) error {
+	if _, err := p.deps.Vcs.PostReview(ctx, ref, ports.ReviewPayload{
+		Body: "Code review bot: daily budget exceeded; review skipped. The check passes by policy.",
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("post neutral comment failed", "err", err.Error())
+	}
+	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+		Name:       "code-review-bot/review",
+		Conclusion: "success",
+		Summary:    "Budget exceeded; review skipped",
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("update check failed", "err", err.Error())
+	}
+	return p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
+		Status:     store.RunStatusBudgetExceeded,
+		FinishedAt: p.deps.Clock.Now(),
+	})
+}
+
+func (p *Pipeline) failOpen(ctx context.Context, ref ports.PrRef, runId store.RunId, cause error) error {
+	p.deps.Obs.Logger.Error("review failing open", "err", cause.Error())
+	if _, err := p.deps.Vcs.PostReview(ctx, ref, ports.ReviewPayload{
+		Body: "Code review bot: an error occurred; the check passes by policy.",
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("post neutral comment failed", "err", err.Error())
+	}
+	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+		Name:       "code-review-bot/review",
+		Conclusion: "success",
+		Summary:    "Review unavailable",
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("update check failed", "err", err.Error())
+	}
+	if err := p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
+		Status:     store.RunStatusFailedOpen,
+		FinishedAt: p.deps.Clock.Now(),
+		Error:      cause.Error(),
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("finish run failed", "err", err.Error())
+	}
+	return cause
+}
+
+func summaryBody(n int, hasHighSeverity bool) string {
+	if n == 0 {
+		return "Reviewed; no comments."
+	}
+	if hasHighSeverity {
+		return fmt.Sprintf("Reviewed; %d comments (bug/security flagged).", n)
+	}
+	return fmt.Sprintf("Reviewed; %d comments.", n)
+}
