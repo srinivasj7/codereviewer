@@ -18,6 +18,7 @@ type Harness struct {
 	Parser         *fakes.Parser
 	Clock          ports.Clock
 	Obs            ports.Obs
+	Repos          *fakes.RepoStore
 	CodeChunks     *fakes.CodeChunkStore
 	Comments       *fakes.CommentStore
 	Rules          *fakes.RuleStore
@@ -35,6 +36,7 @@ func New() *Harness {
 		Parser:         fakes.NewParser(),
 		Clock:          clocksystem.New(),
 		Obs:            obsstdout.New("test"),
+		Repos:          fakes.NewRepoStore(),
 		CodeChunks:     fakes.NewCodeChunkStore(),
 		Comments:       fakes.NewCommentStore(),
 		Rules:          fakes.NewRuleStore(),

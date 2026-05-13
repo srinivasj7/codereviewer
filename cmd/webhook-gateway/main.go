@@ -1,9 +1,10 @@
 // webhook-gateway terminates inbound VCS webhooks. It verifies the
-// HMAC signature via the VcsSource adapter, routes events to the
-// appropriate bus queue, and acks the delivery with 202 Accepted.
+// HMAC signature via the VcsSource adapter, auto-registers the source
+// repo (and its tenant) in the database the first time it's seen, and
+// routes the event to the appropriate bus queue.
 //
-// Slice 1: hardcoded :8080. Slice 2 plumbs the listen address through
-// config and adds slash-command parsing (/review, /improve, /ask).
+// Slash commands in PR comments:
+//   - "/review" re-triggers a review job against the current head
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,12 +25,9 @@ import (
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/ports"
+	"codereviewer/internal/ports/store"
 	"codereviewer/internal/schemas"
 )
-
-// defaultTenantId is the single-tenant placeholder for slice 1. A
-// per-tenant routing table arrives with multi-tenant support.
-const defaultTenantId = ports.TenantId("default-tenant")
 
 func main() {
 	cfgPath := flag.String("config", "config.toml", "path to TOML config file")
@@ -65,14 +64,30 @@ func run(cfgPath string) error {
 		return fmt.Errorf("vcs: %w", err)
 	}
 
+	stores, err := boot.PickStores(ctx, cfg.Store, obs)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if stores.Close != nil {
+		defer stores.Close()
+	}
+
+	gw := &gateway{
+		vcs:      vcs,
+		bus:      bus,
+		repos:    stores.Repos,
+		obs:      obs,
+		tenantId: ports.TenantId(cfg.Tenant.Id),
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
-	r.Get("/health", healthHandler(bus))
-	r.Post("/github/webhook", webhookHandler(vcs, bus, obs))
+	r.Get("/health", gw.health)
+	r.Post("/github/webhook", gw.webhook)
 
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.Gateway.ListenAddr,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -93,61 +108,63 @@ func run(cfgPath string) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-func healthHandler(bus ports.MessageBus) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		status, err := bus.Health(r.Context())
-		if err != nil || !status.Healthy {
-			http.Error(w, "unhealthy: "+status.Detail, http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = io.WriteString(w, "ok\n")
-	}
+type gateway struct {
+	vcs      ports.VcsSource
+	bus      ports.MessageBus
+	repos    store.RepoStore
+	obs      ports.Obs
+	tenantId ports.TenantId
 }
 
-func webhookHandler(vcs ports.VcsSource, bus ports.MessageBus, obs ports.Obs) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
-			return
-		}
-		event, err := vcs.VerifyWebhook(r.Context(), r.Header, body)
-		if err != nil {
-			obs.Logger.Warn("webhook rejected",
-				"err", err.Error(),
-				"delivery", r.Header.Get("X-GitHub-Delivery"),
-				"event", r.Header.Get("X-GitHub-Event"),
-			)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if err := route(r.Context(), bus, event); err != nil {
-			obs.Logger.Error("route webhook failed",
-				"err", err.Error(),
-				"kind", string(event.Kind),
-				"delivery", event.DeliveryId,
-			)
-			http.Error(w, "route", http.StatusInternalServerError)
-			return
-		}
-		obs.Logger.Info("webhook accepted",
+func (g *gateway) health(w http.ResponseWriter, r *http.Request) {
+	status, err := g.bus.Health(r.Context())
+	if err != nil || !status.Healthy {
+		http.Error(w, "unhealthy: "+status.Detail, http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = io.WriteString(w, "ok\n")
+}
+
+func (g *gateway) webhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	event, err := g.vcs.VerifyWebhook(r.Context(), r.Header, body)
+	if err != nil {
+		g.obs.Logger.Warn("webhook rejected",
+			"err", err.Error(),
+			"delivery", r.Header.Get("X-GitHub-Delivery"),
+			"event", r.Header.Get("X-GitHub-Event"),
+		)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := g.route(r.Context(), event); err != nil {
+		g.obs.Logger.Error("route webhook failed",
+			"err", err.Error(),
 			"kind", string(event.Kind),
 			"delivery", event.DeliveryId,
 		)
-		w.WriteHeader(http.StatusAccepted)
+		http.Error(w, "route", http.StatusInternalServerError)
+		return
 	}
+	g.obs.Logger.Info("webhook accepted",
+		"kind", string(event.Kind),
+		"delivery", event.DeliveryId,
+	)
+	w.WriteHeader(http.StatusAccepted)
 }
 
-func route(ctx context.Context, bus ports.MessageBus, event ports.WebhookEvent) error {
+func (g *gateway) route(ctx context.Context, event ports.WebhookEvent) error {
 	switch event.Kind {
 	case ports.WebhookKindPullRequest:
-		return routePullRequest(ctx, bus, event.PullRequest)
+		return g.routePullRequest(ctx, event.PullRequest)
 	case ports.WebhookKindPush:
-		return routePush(ctx, bus, event.Push)
+		return g.routePush(ctx, event.Push)
 	case ports.WebhookKindReviewComment:
-		// Slash commands (/review, /improve, /ask) arrive here. Slice 2
-		// adds parsing and routing.
-		return nil
+		return g.routeReviewComment(ctx, event.ReviewComment)
 	case ports.WebhookKindReaction:
 		// Feedback signals; slice 4.
 		return nil
@@ -155,28 +172,34 @@ func route(ctx context.Context, bus ports.MessageBus, event ports.WebhookEvent) 
 	return nil
 }
 
-func routePullRequest(ctx context.Context, bus ports.MessageBus, p *ports.PullRequestPayload) error {
+func (g *gateway) routePullRequest(ctx context.Context, p *ports.PullRequestPayload) error {
 	if p == nil {
 		return nil
 	}
 	switch p.Action {
 	case "opened", "synchronize", "reopened":
-		// continue
 	default:
 		return nil
 	}
 	if p.IsDraft {
 		return nil
 	}
+
+	repo := p.Repo
+	repo.TenantId = g.tenantId
+	if err := g.ensureRepo(ctx, repo); err != nil {
+		return err
+	}
+
 	ref := p.Ref
-	ref.TenantId = defaultTenantId
-	return schemas.PublishReviewJob(ctx, bus, schemas.ReviewJob{
+	ref.TenantId = g.tenantId
+	return schemas.PublishReviewJob(ctx, g.bus, schemas.ReviewJob{
 		PrRef:   ref,
 		Trigger: triggerFor(p.Action),
 	})
 }
 
-func routePush(ctx context.Context, bus ports.MessageBus, p *ports.PushPayload) error {
+func (g *gateway) routePush(ctx context.Context, p *ports.PushPayload) error {
 	if p == nil {
 		return nil
 	}
@@ -184,13 +207,70 @@ func routePush(ctx context.Context, bus ports.MessageBus, p *ports.PushPayload) 
 	if p.Ref != expected {
 		return nil
 	}
-	return schemas.PublishIndexJob(ctx, bus, schemas.IndexJob{
-		TenantId:  defaultTenantId,
+
+	repo := p.Repo
+	repo.TenantId = g.tenantId
+	if err := g.ensureRepo(ctx, repo); err != nil {
+		return err
+	}
+
+	return schemas.PublishIndexJob(ctx, g.bus, schemas.IndexJob{
+		TenantId:  g.tenantId,
 		RepoId:    p.Repo.RepoId,
 		Ref:       p.Ref,
 		BeforeSha: p.BeforeSha,
 		HeadSha:   p.HeadSha,
 	})
+}
+
+func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewCommentPayload) error {
+	if p == nil || p.IsBot {
+		return nil
+	}
+	body := strings.TrimSpace(p.Body)
+	cmd, rest := parseSlashCommand(body)
+	switch cmd {
+	case "/review":
+		_ = rest // slice 2 ignores args
+		ref := p.Ref
+		ref.TenantId = g.tenantId
+		return schemas.PublishReviewJob(ctx, g.bus, schemas.ReviewJob{
+			PrRef:   ref,
+			Trigger: ports.TriggerSlashCommand,
+		})
+	case "/improve", "/ask":
+		// Parked for slice 3; tracked so users get a clear log line.
+		g.obs.Logger.Info("slash command not yet supported",
+			"command", cmd, "pr_number", p.Ref.PrNumber)
+		return nil
+	}
+	return nil
+}
+
+func (g *gateway) ensureRepo(ctx context.Context, repo ports.RepoRef) error {
+	if g.repos == nil {
+		return nil
+	}
+	if err := g.repos.EnsureExists(ctx, repo); err != nil {
+		return fmt.Errorf("ensure repo: %w", err)
+	}
+	return nil
+}
+
+func parseSlashCommand(body string) (cmd, rest string) {
+	if !strings.HasPrefix(body, "/") {
+		return "", ""
+	}
+	firstLine := body
+	if i := strings.IndexByte(body, '\n'); i >= 0 {
+		firstLine = body[:i]
+	}
+	parts := strings.SplitN(firstLine, " ", 2)
+	cmd = strings.ToLower(parts[0])
+	if len(parts) == 2 {
+		rest = strings.TrimSpace(parts[1])
+	}
+	return cmd, rest
 }
 
 func triggerFor(action string) ports.Trigger {

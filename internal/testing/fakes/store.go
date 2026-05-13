@@ -10,6 +10,33 @@ import (
 	"codereviewer/internal/ports/store"
 )
 
+// RepoStore is an in-memory RepoStore.
+type RepoStore struct {
+	mu    sync.Mutex
+	repos map[ports.RepoId]ports.RepoRef
+}
+
+// NewRepoStore returns an empty RepoStore.
+func NewRepoStore() *RepoStore {
+	return &RepoStore{repos: make(map[ports.RepoId]ports.RepoRef)}
+}
+
+// EnsureExists upserts.
+func (s *RepoStore) EnsureExists(_ context.Context, repo ports.RepoRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repos[repo.RepoId] = repo
+	return nil
+}
+
+// Get returns the repo by id.
+func (s *RepoStore) Get(_ context.Context, repoId ports.RepoId) (ports.RepoRef, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.repos[repoId]
+	return r, ok, nil
+}
+
 // PrRunStore is an in-memory PrRunStore that tracks all runs by
 // idempotency key. Used by smoke and budget tests to assert final state.
 type PrRunStore struct {

@@ -21,9 +21,10 @@ import (
 	"codereviewer/internal/schemas"
 )
 
-// Stores bundles the seven store sub-ports. Adapters that back all of
-// them with one connection (storepostgres) return all seven at once.
+// Stores bundles the eight store sub-ports. Adapters that back all of
+// them with one connection (storepostgres) return all eight at once.
 type Stores struct {
+	Repos          store.RepoStore
 	CodeChunks     store.CodeChunkStore
 	Comments       store.CommentStore
 	Rules          store.RuleStore
@@ -115,6 +116,7 @@ func PickStores(ctx context.Context, cfg schemas.StoreConfig, _ ports.Obs) (Stor
 		}
 		s := storepostgres.NewStores(pool)
 		return Stores{
+			Repos:          s.Repos,
 			CodeChunks:     s.CodeChunks,
 			Comments:       s.Comments,
 			Rules:          s.Rules,

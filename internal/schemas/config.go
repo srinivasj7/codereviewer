@@ -20,6 +20,20 @@ type Config struct {
 	Observability ObservabilityConfig `toml:"observability"`
 	Cost          CostConfig          `toml:"cost"`
 	Rules         RulesConfig         `toml:"rules"`
+	Gateway       GatewayConfig       `toml:"gateway"`
+	Tenant        TenantConfig        `toml:"tenant"`
+}
+
+// GatewayConfig configures the webhook gateway HTTP listener.
+type GatewayConfig struct {
+	ListenAddr string `toml:"listen_addr"`
+}
+
+// TenantConfig sets the deployment's tenant identity. Single-tenant
+// deployments hardcode this; multi-tenant routing arrives later.
+type TenantConfig struct {
+	Id   string `toml:"id"`
+	Name string `toml:"name"`
 }
 
 // VcsConfig configures the version-control adapter.
@@ -111,6 +125,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Cost.DailyUsdCapDefault <= 0 {
 		c.Cost.DailyUsdCapDefault = 5.00
+	}
+	if c.Gateway.ListenAddr == "" {
+		c.Gateway.ListenAddr = ":8080"
+	}
+	if c.Tenant.Id == "" {
+		c.Tenant.Id = "default-tenant"
+	}
+	if c.Tenant.Name == "" {
+		c.Tenant.Name = "default"
 	}
 	return nil
 }

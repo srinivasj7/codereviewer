@@ -42,3 +42,10 @@ daily_usd_cap_default = 5.00
 [rules]
 git_url = ""
 branch  = "main"
+
+[gateway]
+listen_addr = ":8080"
+
+[tenant]
+id   = "default-tenant"
+name = "default"
