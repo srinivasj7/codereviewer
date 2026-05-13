@@ -299,6 +299,15 @@ func (s *CommentStore) UpdateOutcome(_ context.Context, id store.CommentId, outc
 	return fmt.Errorf("fake CommentStore: unknown comment %s", id)
 }
 
+// AllComments returns a snapshot of every upserted comment. Test helper.
+func (s *CommentStore) AllComments() []store.Comment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.Comment, len(s.comments))
+	copy(out, s.comments)
+	return out
+}
+
 // ListByPr returns comments for a PR.
 func (s *CommentStore) ListByPr(_ context.Context, ref ports.PrRef) ([]store.Comment, error) {
 	s.mu.Lock()

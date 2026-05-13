@@ -19,6 +19,8 @@ import (
 type Vcs struct {
 	mu               sync.Mutex
 	diffByRef        map[string]ports.UnifiedDiff
+	prComments       map[string][]ports.HumanComment
+	closedPrs        []int
 	postReviewCalls  []PostReviewCall
 	updateCheckCalls []UpdateCheckCall
 	FetchDiffErr     error
@@ -96,9 +98,38 @@ func (v *Vcs) ListChangedFiles(_ context.Context, _ ports.RepoId, _, _ string) (
 	return nil, nil
 }
 
-// ListPrComments returns an empty list.
-func (v *Vcs) ListPrComments(_ context.Context, _ ports.PrRef) ([]ports.HumanComment, error) {
-	return nil, nil
+// ListPrComments returns the comments installed via SetPrComments,
+// or empty if none.
+func (v *Vcs) ListPrComments(_ context.Context, ref ports.PrRef) ([]ports.HumanComment, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.prComments[diffKey(ref)], nil
+}
+
+// SetPrComments installs comments returned by ListPrComments for ref.
+func (v *Vcs) SetPrComments(ref ports.PrRef, comments []ports.HumanComment) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.prComments == nil {
+		v.prComments = make(map[string][]ports.HumanComment)
+	}
+	v.prComments[diffKey(ref)] = comments
+}
+
+// SearchClosedPrs returns PR numbers installed via SetClosedPrs.
+func (v *Vcs) SearchClosedPrs(_ context.Context, _ ports.RepoId, _ time.Time) ([]int, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]int, len(v.closedPrs))
+	copy(out, v.closedPrs)
+	return out, nil
+}
+
+// SetClosedPrs installs the PR numbers returned by SearchClosedPrs.
+func (v *Vcs) SetClosedPrs(numbers []int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.closedPrs = append([]int(nil), numbers...)
 }
 
 // PostReview records the call and synthesizes a PostedReview.

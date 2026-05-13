@@ -18,30 +18,33 @@ type CommentStore struct {
 }
 
 // Upsert inserts or replaces by github_id when present. Returns the
-// internal comment_id.
+// authoritative comment_id from the database — on conflict, this is
+// the id of the pre-existing row, not the freshly generated one.
 func (s *CommentStore) Upsert(ctx context.Context, c store.CommentUpsert) (store.CommentId, error) {
 	id := uuid.NewString()
-	_, err := s.pool.Exec(ctx, `
+	var stored string
+	err := s.pool.QueryRow(ctx, `
 INSERT INTO review_comments (
   comment_id, tenant_id, repo_id, pr_number, source, github_id,
   file_path, start_line, end_line, diff_hunk, comment_text, category,
   outcome, outcome_signal, embedding
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT (github_id) WHERE github_id IS NOT NULL DO UPDATE SET
-  comment_text = EXCLUDED.comment_text,
-  category = EXCLUDED.category,
-  outcome = EXCLUDED.outcome,
+  comment_text   = EXCLUDED.comment_text,
+  category       = EXCLUDED.category,
+  outcome        = EXCLUDED.outcome,
   outcome_signal = EXCLUDED.outcome_signal,
-  embedding = EXCLUDED.embedding
+  embedding      = EXCLUDED.embedding
+RETURNING comment_id::text
 `,
 		id, string(c.TenantId), string(c.RepoId), c.PrNumber, c.Source, c.GithubId,
 		c.FilePath, c.StartLine, c.EndLine, nullableText(c.DiffHunk), c.CommentText, nullableText(c.Category),
 		string(c.Outcome), string(c.OutcomeSignal), pgvector.NewVector(c.Embedding),
-	)
+	).Scan(&stored)
 	if err != nil {
 		return "", fmt.Errorf("upsert comment: %w", err)
 	}
-	return store.CommentId(id), nil
+	return store.CommentId(stored), nil
 }
 
 // SearchByEmbedding returns top-K most-similar comments. Accepted

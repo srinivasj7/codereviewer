@@ -50,12 +50,28 @@ go build ./...
 
 `go mod tidy` may prune tree-sitter deps when CGO is disabled; run with `CGO_ENABLED=1` (or in WSL/Linux/macOS) when adjusting dependencies.
 
+## Backfilling historical comments
+
+Once the stack is up and you've configured your GitHub App credentials, seed the retrieval index from the past 9 months of merged PRs:
+
+```sh
+docker compose run --rm -v $PWD/docker/dev.toml:/app/config.toml \
+  $(docker compose images backfill-cli -q 2>/dev/null || docker compose build backfill-cli) \
+  --config /app/config.toml --repo your-org/your-repo --window-days 270
+```
+
+Or, locally:
+
+```sh
+go run ./cmd/backfill-cli --config docker/dev.toml --repo your-org/your-repo --window-days 270
+```
+
+The backfill is idempotent on `github_id`; re-running with a longer window extends history without duplicating rows.
+
 ## Project status
 
-Slice 1 — webhook + indexer + Docker stack — complete.
+Slices 0–3 — skeleton, infrastructure, naive review pipeline, retrieval + backfill — complete.
 
 Remaining slices in [`implementation-plan.md`](./implementation-plan.md):
-- Slice 2: naive review pipeline tuning, baseline cost measurement
-- Slice 3: retrieval + backfill CLI
 - Slice 4: rules sync, feedback worker, OTel observability
 - Slice 5: Terraform deploy profile (lean-self-hosted EC2)

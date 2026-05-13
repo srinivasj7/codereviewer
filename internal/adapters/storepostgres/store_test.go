@@ -211,6 +211,44 @@ func TestEmbeddingCache_RoundTrip(t *testing.T) {
 	assert.False(t, missing, "missing keys should not appear in result map")
 }
 
+func TestCommentStore_UpsertIdempotentOnGithubId(t *testing.T) {
+	s := requireDB(t)
+	require.NoError(t, s.Repos.EnsureExists(testCtx, ports.RepoRef{
+		TenantId: "tenant-a", RepoId: "octo/repo", Owner: "octo", Name: "repo", DefaultBranch: "main",
+	}))
+
+	githubId := int64(12345)
+	v := unitVec(1024, 1.0, 0.0, 0.0)
+	id1, err := s.Comments.Upsert(testCtx, store.CommentUpsert{
+		TenantId: "tenant-a", RepoId: "octo/repo", PrNumber: 7,
+		Source:   "human",
+		GithubId: &githubId,
+		FilePath: "a.ts", StartLine: 1, EndLine: 1,
+		CommentText: "original",
+		Outcome:     store.OutcomePending,
+		Embedding:   v,
+	})
+	require.NoError(t, err)
+
+	id2, err := s.Comments.Upsert(testCtx, store.CommentUpsert{
+		TenantId: "tenant-a", RepoId: "octo/repo", PrNumber: 7,
+		Source:   "human",
+		GithubId: &githubId,
+		FilePath: "a.ts", StartLine: 1, EndLine: 1,
+		CommentText: "updated body",
+		Outcome:     store.OutcomeAccepted,
+		Embedding:   v,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, id1, id2, "second upsert with same github_id must return the original comment_id")
+
+	got, err := s.Comments.ListByPr(testCtx, ports.PrRef{TenantId: "tenant-a", RepoId: "octo/repo", PrNumber: 7})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "the row count must stay at 1 across re-runs")
+	assert.Equal(t, "updated body", got[0].CommentText)
+	assert.Equal(t, store.OutcomeAccepted, got[0].Outcome)
+}
+
 func TestCostCapStore_GetEffective_FallsThroughToDefault(t *testing.T) {
 	s := requireDB(t)
 	require.NoError(t, s.Repos.EnsureExists(testCtx, ports.RepoRef{

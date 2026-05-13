@@ -279,7 +279,9 @@ func (s *Source) ListChangedFiles(ctx context.Context, repoId ports.RepoId, base
 	return out, nil
 }
 
-// ListPrComments returns review-level comments on a PR.
+// ListPrComments returns review-level comments on a PR including diff
+// hunks and reactions, both of which are used by the backfill and
+// retrieval pipelines.
 func (s *Source) ListPrComments(ctx context.Context, ref ports.PrRef) ([]ports.HumanComment, error) {
 	owner, name, err := parseRepoId(ref.RepoId)
 	if err != nil {
@@ -294,13 +296,17 @@ func (s *Source) ListPrComments(ctx context.Context, ref ports.PrRef) ([]ports.H
 		}
 		for _, c := range comments {
 			all = append(all, ports.HumanComment{
-				ExternalId: c.GetID(),
-				Author:     c.GetUser().GetLogin(),
-				Body:       c.GetBody(),
-				Path:       c.GetPath(),
-				StartLine:  c.GetStartLine(),
-				EndLine:    c.GetLine(),
-				CreatedAt:  c.GetCreatedAt().Time,
+				ExternalId:        c.GetID(),
+				Author:            c.GetUser().GetLogin(),
+				Body:              c.GetBody(),
+				Path:              c.GetPath(),
+				DiffHunk:          c.GetDiffHunk(),
+				CommitId:          c.GetCommitID(),
+				StartLine:         c.GetStartLine(),
+				EndLine:           c.GetLine(),
+				ReactionsPlusOne:  c.GetReactions().GetPlusOne(),
+				ReactionsMinusOne: c.GetReactions().GetMinusOne(),
+				CreatedAt:         c.GetCreatedAt().Time,
 			})
 		}
 		if resp.NextPage == 0 {
@@ -309,6 +315,42 @@ func (s *Source) ListPrComments(ctx context.Context, ref ports.PrRef) ([]ports.H
 		opt.Page = resp.NextPage
 	}
 	return all, nil
+}
+
+// SearchClosedPrs enumerates closed PRs in the repo merged on or after
+// `since`. Paginates through GitHub Search (max 1000 results per query
+// by API design; for windows larger than 1000 PRs the caller must
+// narrow the window or this method needs date-range chunking).
+func (s *Source) SearchClosedPrs(ctx context.Context, repoId ports.RepoId, since time.Time) ([]int, error) {
+	owner, name, err := parseRepoId(repoId)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf("repo:%s/%s is:pr is:closed merged:>=%s",
+		owner, name, since.UTC().Format("2006-01-02"))
+	opt := &github.SearchOptions{
+		Sort:        "created",
+		Order:       "asc",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	var prs []int
+	for {
+		result, resp, err := s.client.Search.Issues(ctx, query, opt)
+		if err != nil {
+			return nil, fmt.Errorf("search closed prs: %w", err)
+		}
+		for _, issue := range result.Issues {
+			if !issue.IsPullRequest() {
+				continue
+			}
+			prs = append(prs, issue.GetNumber())
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return prs, nil
 }
 
 // PostReview submits a review with inline comments + summary body.

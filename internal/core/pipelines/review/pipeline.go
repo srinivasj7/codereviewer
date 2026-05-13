@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"codereviewer/internal/core/budgets"
 	"codereviewer/internal/core/llm"
 	"codereviewer/internal/core/prompt"
+	"codereviewer/internal/core/retrieval"
 	"codereviewer/internal/ports"
 	"codereviewer/internal/ports/store"
 	"codereviewer/internal/schemas"
@@ -74,6 +76,7 @@ type Deps struct {
 	EmbeddingCache store.EmbeddingCache
 	TokenCap       int    // 0 = default
 	SystemPrompt   string // empty = default
+	EmbeddingModel string // empty = adapter default
 }
 
 // Pipeline is the per-PR review use case.
@@ -149,10 +152,39 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("fetch diff: %w", err))
 	}
 
-	// Slice 0: retrieval is intentionally empty. Slice 3 plumbs the
-	// CodeRetriever / CommentRetriever / RuleRetriever fields onto Deps
-	// and uses them here.
-	var related, pastReviews, ruleStrings []string
+	changedPaths := extractChangedFiles(diff.Content)
+	var sameFile string
+	if len(changedPaths) > 0 {
+		sameFile = changedPaths[0]
+	}
+
+	cacheKey := "review-query:" + string(ref.RepoId) + ":" + ref.HeadSha
+	queryEmbedding, embedErr := retrieval.EmbedQuery(
+		ctx, p.deps.Llm, p.deps.EmbeddingCache, cacheKey, diff.Content, p.deps.EmbeddingModel,
+	)
+	if embedErr != nil {
+		p.deps.Obs.Logger.Warn("retrieval embedding failed; reviewing without context",
+			"err", embedErr.Error(), "pr_number", ref.PrNumber)
+	}
+	sw.Mark("embed_query")
+
+	codeHits, err := retrieval.RetrieveCode(ctx, p.deps.CodeChunks, ref.RepoId, queryEmbedding, sameFile, 0)
+	if err != nil {
+		p.deps.Obs.Logger.Warn("code retrieval failed", "err", err.Error())
+	}
+	commentHits, err := retrieval.RetrieveComments(ctx, p.deps.Comments, ref.RepoId, queryEmbedding, 0)
+	if err != nil {
+		p.deps.Obs.Logger.Warn("comment retrieval failed", "err", err.Error())
+	}
+	ruleHits, err := retrieval.RetrieveRules(ctx, p.deps.Rules, ref.RepoId, changedPaths)
+	if err != nil {
+		p.deps.Obs.Logger.Warn("rule retrieval failed", "err", err.Error())
+	}
+	sw.Mark("retrieve")
+
+	related := retrieval.FormatCode(codeHits)
+	pastReviews := retrieval.FormatComments(commentHits)
+	ruleStrings := retrieval.FormatRules(ruleHits)
 
 	tokenCap := p.deps.TokenCap
 	if costCap.PerPrTokenCap > 0 && costCap.PerPrTokenCap < tokenCap {
@@ -251,9 +283,52 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		"cost_usd", resp.CostUsd,
 		"model", resp.ModelUsed,
 		"check_conclusion", conclusion,
+		"retrieved_code", len(codeHits),
+		"retrieved_comments", len(commentHits),
+		"retrieved_rules", len(ruleHits),
+		"dropped_sections", droppedNames(assembled.Dropped),
 	}, sw.Kv()...)
 	p.deps.Obs.Logger.Info("review completed", logKv...)
 	return finishErr
+}
+
+// extractChangedFiles parses the unified-diff "+++ b/<path>" headers
+// to enumerate the post-image file paths touched by the PR. Deleted
+// files (header == "/dev/null") are skipped — there's nothing for
+// the LLM to comment on in the after state.
+func extractChangedFiles(diff string) []string {
+	var paths []string
+	seen := make(map[string]struct{})
+	for _, line := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+		if rest == "/dev/null" {
+			continue
+		}
+		rest = strings.TrimPrefix(rest, "b/")
+		if rest == "" {
+			continue
+		}
+		if _, ok := seen[rest]; ok {
+			continue
+		}
+		seen[rest] = struct{}{}
+		paths = append(paths, rest)
+	}
+	return paths
+}
+
+func droppedNames(sections []prompt.Section) []string {
+	if len(sections) == 0 {
+		return nil
+	}
+	out := make([]string, len(sections))
+	for i, s := range sections {
+		out[i] = s.String()
+	}
+	return out
 }
 
 func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runId store.RunId) error {

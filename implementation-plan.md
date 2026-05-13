@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 2 complete; slice 3 next
+**Status:** Slice 3 complete; slice 4 next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -42,7 +42,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | 0. Skeleton + contracts + smoke test | **Complete** | `go build`, `go vet`, `go test` all green. 3 test packages (llm, prompt, smoke) covering drop-order, LLM parse, pipeline success/failure/budget/dedup/fail-open paths. |
 | 1. Webhook + indexer (local infra) | **Complete** | 5 production adapters (storepostgres, busnats, vcsgithub, llmlitellm, parsertreesitter), full indexer pipeline, chi webhook gateway, cmd/migrate with embedded migrations, docker-compose stack. Verified: all 4 Go images build (including indexer with CGO+tree-sitter), postgres+pgvector and NATS come up healthy, `docker compose run --rm migrate` applies all 4 migrations cleanly (11 tables created in the schema). Slice 0 tests still green. |
 | 2. Naive review pipeline | **Complete** | RepoStore + auto-registration on every webhook, migration 005 fixes id-type mismatch (UUID → TEXT), tiktoken-based token estimation for OpenAI models, per-stage latency stopwatch in the review pipeline (greppable p95 line), configurable gateway listen address, /review slash command, storepostgres contract tests (6 tests, external Postgres via TESTS_POSTGRES_URL — no testcontainers dep per library policy). Verified: `go vet/build/test ./...` clean; `make test-integration` passes against `docker compose up postgres`. |
-| 3. Retrieval + backfill | Not started | |
+| 3. Retrieval + backfill | **Complete** | Live retrievers wired into the review pipeline (one shared diff embedding → code + comment vector search; rules scope-matched in-memory). Format helpers render `<file>:lines (symbol)`, `[OUTCOME] <file>`, `title\ndescription`. `cmd/backfill-cli` paginates GitHub Search closed-PR results, ingests review comments + diff hunks + reactions, embeds via the cache (hash dedup), upserts with `source='human'` and `RETURNING comment_id` so re-runs return the stable id. New tests: 4 backfill unit tests + 4 format tests + a storepostgres idempotency test (8 contract tests total). |
 | 4. Rules + feedback + observability | Not started | |
 | 5. EC2 deploy profile | Not started | |
 
@@ -502,6 +502,15 @@ Conventions:
 - No tree-sitter; `FakeParser` splits content by `\n\n` for tests.
 - No Docker, no Terraform, no CI workflow files (those arrive with slice 1).
 - No `sqlc generate` run yet — `internal/db/sqlc.yaml` is committed but `query/*.sql` is empty.
+
+## Minor deviations from the plan (slice 3)
+
+- **Outcome heuristic from reactions only.** The design's full feedback logic (line-changed-after-comment, reply detection) lives in the slice 4 feedback pipeline. Backfill uses the coarser thumbs-up/down signal which is good enough to seed retrieval weighting; the feedback worker will overwrite outcomes as it observes implicit signals.
+- **Single embedding per review for both code and comment search.** Per design §6.1 the two searches use the same diff embedding; we materialize it once via `EmbeddingCache` (keyed `review-query:<repo>:<head_sha>`) and pass it to both retrievers. Cheap and keeps the cost predictable.
+- **Diff embedded with simple char-ratio truncation** at ~8K tokens. Splitting the diff per-file and merging search results is a slice 4+ enhancement; for typical PRs the diff fits comfortably.
+- **Rule scope matching `path:**/*` patterns** is approximate via `filepath.Match` (which doesn't natively support `**`). Slice 4 can substitute a glob library or hand-rolled matcher; current behavior is "good enough for the documented rule shapes."
+- **`CommentStore.Upsert` now uses `RETURNING comment_id`.** Slice 1 returned the freshly-generated UUID even when the row already existed under a different id — broken for idempotency. Fixed; the storepostgres contract test guards the invariant.
+- **GitHub Search API rate-limit handling** is delegated to the go-github library's default retry-on-429. For windows that return >1000 PRs the API caps results; date-range chunking would be needed and is a slice 4 enhancement.
 
 ## Minor deviations from the plan (slice 2)
 

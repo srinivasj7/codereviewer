@@ -16,6 +16,10 @@ type VcsSource interface {
 	FetchFileAt(ctx context.Context, repoId RepoId, sha, path string) (string, error)
 	ListChangedFiles(ctx context.Context, repoId RepoId, baseSha, headSha string) ([]ChangedFile, error)
 	ListPrComments(ctx context.Context, ref PrRef) ([]HumanComment, error)
+	// SearchClosedPrs returns PR numbers for closed PRs in the repo
+	// merged on or after `since`. Used by the backfill CLI to scan the
+	// history window; rate-limit handling is the adapter's concern.
+	SearchClosedPrs(ctx context.Context, repoId RepoId, since time.Time) ([]int, error)
 	PostReview(ctx context.Context, ref PrRef, review ReviewPayload) (PostedReview, error)
 	UpdateCheck(ctx context.Context, ref PrRef, result CheckResult) error
 }
@@ -104,15 +108,21 @@ type ChangedFile struct {
 }
 
 // HumanComment is a review comment authored by a human, used as
-// additional prompt context when enabled.
+// additional prompt context and as the backfill source for past-review
+// retrieval. DiffHunk and Reactions are populated where the upstream
+// API provides them (GitHub does); they're empty for VCSs that don't.
 type HumanComment struct {
-	ExternalId int64
-	Author     string
-	Body       string
-	Path       string
-	StartLine  int
-	EndLine    int
-	CreatedAt  time.Time
+	ExternalId        int64
+	Author            string
+	Body              string
+	Path              string
+	DiffHunk          string
+	CommitId          string
+	StartLine         int
+	EndLine           int
+	ReactionsPlusOne  int
+	ReactionsMinusOne int
+	CreatedAt         time.Time
 }
 
 // ReviewPayload is what the bot posts. Comments are inline; Body is the
