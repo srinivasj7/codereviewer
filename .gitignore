@@ -36,3 +36,4 @@ coverage.html
 
 # Temp
 tmp/
+.commit-msg.tmp
