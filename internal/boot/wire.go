@@ -8,16 +8,21 @@ import (
 	"fmt"
 
 	"codereviewer/internal/adapters/busmem"
+	"codereviewer/internal/adapters/busnats"
 	"codereviewer/internal/adapters/clocksystem"
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/adapters/obsstdout"
+	"codereviewer/internal/adapters/parsertreesitter"
 	"codereviewer/internal/adapters/secretsenv"
+	"codereviewer/internal/adapters/storepostgres"
+	"codereviewer/internal/adapters/vcsgithub"
 	"codereviewer/internal/ports"
 	"codereviewer/internal/ports/store"
 	"codereviewer/internal/schemas"
 )
 
 // Stores bundles the seven store sub-ports. Adapters that back all of
-// them with one connection (e.g. storepostgres) return all seven at once.
+// them with one connection (storepostgres) return all seven at once.
 type Stores struct {
 	CodeChunks     store.CodeChunkStore
 	Comments       store.CommentStore
@@ -26,17 +31,21 @@ type Stores struct {
 	Feedback       store.FeedbackStore
 	CostCaps       store.CostCapStore
 	EmbeddingCache store.EmbeddingCache
+	Close          func()
 }
 
 // PickBus selects a MessageBus implementation.
-func PickBus(cfg schemas.MessageBusConfig, _ ports.Obs) (ports.MessageBus, error) {
+func PickBus(ctx context.Context, cfg schemas.MessageBusConfig, _ ports.Obs) (ports.MessageBus, error) {
 	switch cfg.Type {
 	case "memory":
 		return busmem.New(), nil
-	case "sqs":
-		return nil, fmt.Errorf("bussqs adapter not yet implemented (slice 1)")
 	case "nats":
-		return nil, fmt.Errorf("busnats adapter not yet implemented (slice 1)")
+		if cfg.ReviewQueueURL == "" {
+			return nil, fmt.Errorf("message_bus.review_queue_url must be set for nats (used as NATS URL)")
+		}
+		return busnats.New(ctx, cfg.ReviewQueueURL)
+	case "sqs":
+		return nil, fmt.Errorf("bussqs adapter not yet implemented (slice 5)")
 	}
 	return nil, fmt.Errorf("unknown message_bus.type: %q", cfg.Type)
 }
@@ -54,47 +63,67 @@ func PickSecrets(cfg schemas.SecretsConfig) (ports.SecretsProvider, error) {
 	return nil, fmt.Errorf("unknown secrets.provider: %q", cfg.Provider)
 }
 
-// PickObservability selects an Obs bundle. Slice 0 always returns
-// obsstdout; the otel sink wiring lands in slice 4.
+// PickObservability selects an Obs bundle. Slice 1 always returns
+// obsstdout; the OTLP exporter wiring lands in slice 4.
 func PickObservability(cfg schemas.ObservabilityConfig) ports.Obs {
 	return obsstdout.New(cfg.ServiceName)
 }
 
-// PickClock returns the system clock. Tests construct a fake directly.
+// PickClock returns the system clock.
 func PickClock() ports.Clock {
 	return clocksystem.New()
 }
 
-// PickVcs selects a VcsSource. Slice 0 only knows the testing fake,
-// which is constructed inside the harness, not here.
+// PickVcs selects a VcsSource.
 func PickVcs(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsSource, error) {
 	switch cfg.Provider {
 	case "github":
-		return nil, fmt.Errorf("vcsgithub adapter not yet implemented (slice 1)")
+		return vcsgithub.New(cfg)
 	case "memory":
 		return nil, fmt.Errorf("the memory vcs lives in internal/testing/fakes; use the harness for tests")
 	}
 	return nil, fmt.Errorf("unknown vcs.provider: %q", cfg.Provider)
 }
 
-// PickLlm selects an LlmGateway. Slice 0 only knows the testing fake,
-// constructed inside the harness.
+// PickLlm selects an LlmGateway.
 func PickLlm(cfg schemas.LlmConfig, _ ports.SecretsProvider, _ ports.Obs) (ports.LlmGateway, error) {
 	switch cfg.Provider {
 	case "litellm":
-		return nil, fmt.Errorf("llmlitellm adapter not yet implemented (slice 1)")
+		return llmlitellm.New(cfg)
 	case "fake":
 		return nil, fmt.Errorf("the fake LLM lives in internal/testing/fakes; use the harness for tests")
 	}
 	return nil, fmt.Errorf("unknown llm.provider: %q", cfg.Provider)
 }
 
-// PickStores selects the seven store sub-ports. Slice 0 has none of the
-// production adapters yet; tests use the in-memory fakes via the harness.
-func PickStores(_ context.Context, cfg schemas.StoreConfig, _ ports.Obs) (Stores, error) {
+// PickParser returns the configured parser registry. Only one
+// implementation today.
+func PickParser() ports.ParserRegistry {
+	return parsertreesitter.New()
+}
+
+// PickStores selects the seven store sub-ports.
+func PickStores(ctx context.Context, cfg schemas.StoreConfig, _ ports.Obs) (Stores, error) {
 	switch cfg.Type {
 	case "postgres":
-		return Stores{}, fmt.Errorf("storepostgres adapter not yet implemented (slice 1)")
+		if cfg.PostgresURL == "" {
+			return Stores{}, fmt.Errorf("store.postgres_url is required")
+		}
+		pool, err := storepostgres.NewPool(ctx, cfg.PostgresURL)
+		if err != nil {
+			return Stores{}, err
+		}
+		s := storepostgres.NewStores(pool)
+		return Stores{
+			CodeChunks:     s.CodeChunks,
+			Comments:       s.Comments,
+			Rules:          s.Rules,
+			PrRuns:         s.PrRuns,
+			Feedback:       s.Feedback,
+			CostCaps:       s.CostCaps,
+			EmbeddingCache: s.EmbeddingCache,
+			Close:          s.Close,
+		}, nil
 	case "memory":
 		return Stores{}, fmt.Errorf("memory stores live in internal/testing/fakes; use the harness for tests")
 	}

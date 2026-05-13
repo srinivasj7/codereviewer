@@ -40,7 +40,10 @@ func run(cfgPath string) error {
 	obs := boot.PickObservability(cfg.Observability)
 	clock := boot.PickClock()
 
-	bus, err := boot.PickBus(cfg.MessageBus, obs)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
 		return fmt.Errorf("bus: %w", err)
 	}
@@ -55,12 +58,12 @@ func run(cfgPath string) error {
 		return fmt.Errorf("llm: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	stores, err := boot.PickStores(ctx, cfg.Store, obs)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
+	}
+	if stores.Close != nil {
+		defer stores.Close()
 	}
 
 	pipeline := review.NewPipeline(review.Deps{
