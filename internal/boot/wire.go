@@ -22,8 +22,8 @@ import (
 	"codereviewer/internal/schemas"
 )
 
-// Stores bundles the nine store sub-ports. Adapters that back all of
-// them with one connection (storepostgres) return all nine at once.
+// Stores bundles the ten store sub-ports. Adapters that back all of
+// them with one connection (storepostgres) return all ten at once.
 //
 // RawHandle is the adapter's underlying connection (e.g. *pgxpool.Pool
 // for storepostgres). It's `any` to keep the bus of dependencies above
@@ -39,6 +39,7 @@ type Stores struct {
 	CostCaps       store.CostCapStore
 	EmbeddingCache store.EmbeddingCache
 	Settings       store.SettingsStore
+	Context        store.ContextStore
 	RawHandle      any
 	Close          func()
 }
@@ -151,6 +152,7 @@ func PickStores(ctx context.Context, cfg schemas.StoreConfig, _ ports.Obs) (Stor
 			CostCaps:       s.CostCaps,
 			EmbeddingCache: s.EmbeddingCache,
 			Settings:       s.Settings,
+			Context:        s.Context,
 			RawHandle:      pool,
 			Close:          s.Close,
 		}, nil

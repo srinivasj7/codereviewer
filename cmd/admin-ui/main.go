@@ -77,6 +77,8 @@ func run(cfgPath string) error {
 		Comments: stores.Comments,
 		Rules:    stores.Rules,
 		PrRuns:   stores.PrRuns,
+		Repos:    stores.Repos,
+		Context:  stores.Context,
 		Pool:     stores.RawHandle,
 		Obs:      obs,
 	}, password, sessionSecret, false /* secure cookie: production sets via reverse proxy */)

@@ -67,6 +67,32 @@ WHERE repo_id = $1
 	return ref, true, nil
 }
 
+// ListByTenant returns all repos for a tenant.
+func (s *RepoStore) ListByTenant(ctx context.Context, tenant ports.TenantId) ([]ports.RepoRef, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT repo_id, tenant_id, owner, name, default_branch
+FROM repos WHERE tenant_id = $1
+ORDER BY repo_id
+`, string(tenant))
+	if err != nil {
+		return nil, fmt.Errorf("list repos: %w", err)
+	}
+	defer rows.Close()
+	var out []ports.RepoRef
+	for rows.Next() {
+		var ref ports.RepoRef
+		var defaultBranch *string
+		if err := rows.Scan(&ref.RepoId, (*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch); err != nil {
+			return nil, fmt.Errorf("scan repo: %w", err)
+		}
+		if defaultBranch != nil {
+			ref.DefaultBranch = *defaultBranch
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
 func tenantDisplayName(id ports.TenantId) string {
 	if id == "" {
 		return "default"

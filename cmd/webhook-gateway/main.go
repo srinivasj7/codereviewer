@@ -80,11 +80,12 @@ func run(cfgPath string) error {
 	}
 
 	gw := &gateway{
-		vcs:      vcs,
-		bus:      bus,
-		repos:    stores.Repos,
-		obs:      obs,
-		tenantId: ports.TenantId(cfg.Tenant.Id),
+		vcs:       vcs,
+		bus:       bus,
+		repos:     stores.Repos,
+		contextDB: stores.Context,
+		obs:       obs,
+		tenantId:  ports.TenantId(cfg.Tenant.Id),
 	}
 
 	r := chi.NewRouter()
@@ -124,11 +125,12 @@ func flushObs(shutdown func(context.Context) error) {
 }
 
 type gateway struct {
-	vcs      ports.VcsSource
-	bus      ports.MessageBus
-	repos    store.RepoStore
-	obs      ports.Obs
-	tenantId ports.TenantId
+	vcs       ports.VcsSource
+	bus       ports.MessageBus
+	repos     store.RepoStore
+	contextDB store.ContextStore
+	obs       ports.Obs
+	tenantId  ports.TenantId
 }
 
 func (g *gateway) health(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +254,8 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 			PrRef:   ref,
 			Trigger: ports.TriggerSlashCommand,
 		})
+	case "/context":
+		return g.handleContextCommand(ctx, p, body, rest)
 	case "/improve", "/ask":
 		// Parked for slice 3; tracked so users get a clear log line.
 		g.obs.Logger.Info("slash command not yet supported",
@@ -272,6 +276,35 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 		})
 	}
 	return nil
+}
+
+// handleContextCommand persists ad-hoc context for the PR. Body is
+// the comment after "/context" — either the rest of the same line, or
+// the entire body minus the command line. The author becomes the
+// created_by attribution.
+func (g *gateway) handleContextCommand(ctx context.Context, p *ports.ReviewCommentPayload, fullBody, rest string) error {
+	if g.contextDB == nil {
+		return nil
+	}
+	text := strings.TrimSpace(rest)
+	if text == "" {
+		// Multi-line: take everything after the first \n.
+		if i := strings.IndexByte(fullBody, '\n'); i >= 0 {
+			text = strings.TrimSpace(fullBody[i+1:])
+		}
+	}
+	if text == "" {
+		g.obs.Logger.Info("ignoring empty /context command", "pr_number", p.Ref.PrNumber)
+		return nil
+	}
+	return g.contextDB.AppendPrContext(ctx, store.PrContextItem{
+		TenantId:  g.tenantId,
+		RepoId:    p.Ref.RepoId,
+		PrNumber:  p.Ref.PrNumber,
+		Source:    "command",
+		Body:      text,
+		CreatedBy: p.AuthorId,
+	})
 }
 
 func (g *gateway) routeReaction(ctx context.Context, p *ports.ReactionPayload) error {

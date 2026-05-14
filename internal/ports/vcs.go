@@ -16,12 +16,24 @@ type VcsSource interface {
 	FetchFileAt(ctx context.Context, repoId RepoId, sha, path string) (string, error)
 	ListChangedFiles(ctx context.Context, repoId RepoId, baseSha, headSha string) ([]ChangedFile, error)
 	ListPrComments(ctx context.Context, ref PrRef) ([]HumanComment, error)
+	// FetchPrMeta returns title, body, branch name. Used by issue-tracker
+	// context providers to scan for ticket references. Adapters that
+	// don't have PR metadata return zero-value fields without error.
+	FetchPrMeta(ctx context.Context, ref PrRef) (PrMeta, error)
 	// SearchClosedPrs returns PR numbers for closed PRs in the repo
 	// merged on or after `since`. Used by the backfill CLI to scan the
 	// history window; rate-limit handling is the adapter's concern.
 	SearchClosedPrs(ctx context.Context, repoId RepoId, since time.Time) ([]int, error)
 	PostReview(ctx context.Context, ref PrRef, review ReviewPayload) (PostedReview, error)
 	UpdateCheck(ctx context.Context, ref PrRef, result CheckResult) error
+}
+
+// PrMeta is the small slice of PR fields the context providers need
+// to find issue references. Adapters populate what they can.
+type PrMeta struct {
+	Title      string
+	Body       string
+	BranchName string
 }
 
 // WebhookEventKind discriminates the WebhookEvent union.

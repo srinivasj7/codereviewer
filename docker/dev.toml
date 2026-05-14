@@ -66,3 +66,23 @@ client_id     = "${ADMIN_GITHUB_OAUTH_CLIENT_ID}"
 client_secret = "${ADMIN_GITHUB_OAUTH_CLIENT_SECRET}"
 callback_url  = "${ADMIN_GITHUB_OAUTH_CALLBACK_URL}"
 allowed_orgs  = []
+
+# Issue-tracker context providers. Each block is independent; leave it
+# blank to disable that source. Repository conventions and ad-hoc PR
+# context are always on (they have no external auth requirement).
+[context]
+allowed_url_hosts    = []     # admin UI URL-fetch allow-list (empty = disabled)
+url_fetch_max_bytes  = 1048576
+max_items_per_pr     = 10
+
+[context.jira]
+base_url  = "${JIRA_BASE_URL}"
+email     = "${JIRA_EMAIL}"
+api_token = "${JIRA_API_TOKEN}"
+
+[context.github_issues]
+enabled = true
+
+[context.linear]
+api_key      = "${LINEAR_API_KEY}"
+team_prefixes = []

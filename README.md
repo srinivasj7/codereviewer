@@ -118,9 +118,22 @@ What you can do from the UI:
 
 > Workers don't watch `app_settings` live. After saving a setting, `docker compose restart review-worker indexer-worker feedback-worker webhook-gateway` to apply.
 
+## Review context — per-repo, issue trackers, ad-hoc notes
+
+The reviewer pulls extra context into each prompt from configurable sources:
+
+- **Repository conventions** — Define a named "instruction set" in the admin UI (e.g. "Go services") and assign it to one or more repos. A `.codereviewer.md` at the repo root overrides the assigned set when present.
+- **JIRA / GitHub Issues / Linear** — Configure any subset in `[context]`. The reviewer scans PR titles, branch names, and bodies for issue references and fetches each ticket's summary + description.
+- **Per-PR ad-hoc context** — Two surfaces:
+  - Post `/context <body>` as a PR comment; the body is attached to that PR.
+  - Use the admin UI's "PR context" page to paste text, upload a file, or fetch a URL (allow-list enforced via `[context].allowed_url_hosts`).
+
+All sources merge into the prompt's `[CONTEXT]` section. Under token pressure the order of preservation is: diff → past reviews → related code → context → rules.
+
 ## Project status
 
-Slices 0–4 + 4.5 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI + import/export — complete.
+Slices 0–4.6 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI + import/export, per-repo config + issue trackers + ad-hoc context — complete.
 
 Remaining slices in [`implementation-plan.md`](./implementation-plan.md):
+- Slice 4.7: limits + retention + operability hardening (janitor, rate limits, PII scrubber, recent-runs viewer)
 - Slice 5: Terraform deploy profile (lean-self-hosted EC2)

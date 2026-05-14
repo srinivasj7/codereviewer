@@ -1,14 +1,22 @@
 package prompt
 
 // Section identifies an optional prompt segment that can be dropped under
-// token pressure. Drop order is fixed: PastReviews → RelatedCode → Rules.
-// The diff is NEVER dropped.
+// token pressure. Drop order is fixed:
+//
+//	PastReviews → RelatedCode → Context → Rules
+//
+// The diff is NEVER dropped. Context (issues, repo conventions, ad-hoc
+// operator notes) drops before Rules because Rules apply across all PRs
+// while Context is one-shot — but Context outlives RelatedCode because
+// issue descriptions are unreplaceable while related code overlaps the
+// diff already.
 type Section int
 
 // Sections that may be dropped under token pressure.
 const (
 	SectionPastReviews Section = iota
 	SectionRelatedCode
+	SectionContext
 	SectionRules
 )
 
@@ -19,6 +27,8 @@ func (s Section) String() string {
 		return "past_reviews"
 	case SectionRelatedCode:
 		return "related_code"
+	case SectionContext:
+		return "context"
 	case SectionRules:
 		return "rules"
 	default:
@@ -32,8 +42,17 @@ type Inputs struct {
 	Diff               string
 	RelatedCode        []string
 	PastReviews        []string
+	Context            []ContextSection
 	Rules              []string
 	ClosingInstruction string
+}
+
+// ContextSection is one heading + body pair. The assembler renders
+// each as a labeled sub-section under the top-level CONTEXT heading.
+type ContextSection struct {
+	Source string // "jira" | "github-issues" | "repo-instructions" | ...
+	Title  string
+	Body   string
 }
 
 // Assembled is the result of Assemble. UserPrompt is the rendered user-turn
@@ -59,10 +78,11 @@ func Assemble(in Inputs, tokenCap int, est TokenEstimator) Assembled {
 	related := in.RelatedCode
 	reviews := in.PastReviews
 	rules := in.Rules
+	contextSec := in.Context
 	var drops []Section
 
 	for {
-		user := buildUserPrompt(in.Diff, related, reviews, rules, in.ClosingInstruction)
+		user := buildUserPrompt(in.Diff, related, reviews, contextSec, rules, in.ClosingInstruction)
 		total := est(in.SystemPrompt) + est(user)
 		if total <= tokenCap {
 			return Assembled{
@@ -80,6 +100,9 @@ func Assemble(in Inputs, tokenCap int, est TokenEstimator) Assembled {
 		case len(related) > 0:
 			related = nil
 			drops = append(drops, SectionRelatedCode)
+		case len(contextSec) > 0:
+			contextSec = nil
+			drops = append(drops, SectionContext)
 		case len(rules) > 0:
 			rules = nil
 			drops = append(drops, SectionRules)

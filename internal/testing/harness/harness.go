@@ -26,6 +26,7 @@ type Harness struct {
 	Feedback       *fakes.FeedbackStore
 	CostCaps       *fakes.CostCapStore
 	EmbeddingCache *fakes.EmbeddingCache
+	Context        *fakes.ContextStore
 }
 
 // New constructs a fresh Harness with default-configured fakes.
@@ -44,6 +45,7 @@ func New() *Harness {
 		Feedback:       fakes.NewFeedbackStore(),
 		CostCaps:       fakes.NewCostCapStore(),
 		EmbeddingCache: fakes.NewEmbeddingCache(),
+		Context:        fakes.NewContextStore(),
 	}
 }
 

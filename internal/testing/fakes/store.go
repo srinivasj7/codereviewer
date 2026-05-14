@@ -38,6 +38,20 @@ func (s *RepoStore) Get(_ context.Context, repoId ports.RepoId) (ports.RepoRef, 
 	return r, ok, nil
 }
 
+// ListByTenant returns all repos belonging to tenant.
+func (s *RepoStore) ListByTenant(_ context.Context, tenant ports.TenantId) ([]ports.RepoRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []ports.RepoRef
+	for _, r := range s.repos {
+		if r.TenantId == tenant {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RepoId < out[j].RepoId })
+	return out, nil
+}
+
 // PrRunStore is an in-memory PrRunStore that tracks all runs by
 // idempotency key. Used by smoke and budget tests to assert final state.
 type PrRunStore struct {
@@ -463,6 +477,138 @@ func (c *EmbeddingCache) PutMany(_ context.Context, entries []store.EmbeddingCac
 	defer c.mu.Unlock()
 	for _, e := range entries {
 		c.entries[e.Hash] = e.Embedding
+	}
+	return nil
+}
+
+// ContextStore is a minimal in-memory ContextStore.
+type ContextStore struct {
+	mu      sync.Mutex
+	sets    map[string]store.InstructionSet
+	repoSet map[ports.RepoId]string
+	prCtx   []store.PrContextItem
+}
+
+// NewContextStore returns an empty ContextStore.
+func NewContextStore() *ContextStore {
+	return &ContextStore{
+		sets:    make(map[string]store.InstructionSet),
+		repoSet: make(map[ports.RepoId]string),
+	}
+}
+
+// UpsertInstructionSet stores by SetId; generates one if empty.
+func (c *ContextStore) UpsertInstructionSet(_ context.Context, s store.InstructionSet) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s.SetId == "" {
+		s.SetId = fmt.Sprintf("set-%d", len(c.sets)+1)
+	}
+	s.UpdatedAt = time.Now()
+	c.sets[s.SetId] = s
+	return nil
+}
+
+// ListInstructionSets returns sets for the tenant, by name.
+func (c *ContextStore) ListInstructionSets(_ context.Context, tenant ports.TenantId) ([]store.InstructionSet, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []store.InstructionSet
+	for _, s := range c.sets {
+		if s.TenantId == tenant {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// GetInstructionSet by id.
+func (c *ContextStore) GetInstructionSet(_ context.Context, setId string) (store.InstructionSet, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.sets[setId]
+	return s, ok, nil
+}
+
+// DeleteInstructionSet removes the set + any assignments to it.
+func (c *ContextStore) DeleteInstructionSet(_ context.Context, setId string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.sets, setId)
+	for r, s := range c.repoSet {
+		if s == setId {
+			delete(c.repoSet, r)
+		}
+	}
+	return nil
+}
+
+// AssignSetToRepo links repo -> set.
+func (c *ContextStore) AssignSetToRepo(_ context.Context, repoId ports.RepoId, setId string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.repoSet[repoId] = setId
+	return nil
+}
+
+// UnassignFromRepo removes the link.
+func (c *ContextStore) UnassignFromRepo(_ context.Context, repoId ports.RepoId) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.repoSet, repoId)
+	return nil
+}
+
+// GetSetForRepo joins repo -> set.
+func (c *ContextStore) GetSetForRepo(_ context.Context, repoId ports.RepoId) (store.InstructionSet, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	setId, ok := c.repoSet[repoId]
+	if !ok {
+		return store.InstructionSet{}, false, nil
+	}
+	s, ok := c.sets[setId]
+	return s, ok, nil
+}
+
+// AppendPrContext stores an item; assigns ItemId if empty.
+func (c *ContextStore) AppendPrContext(_ context.Context, item store.PrContextItem) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if item.ItemId == "" {
+		item.ItemId = fmt.Sprintf("ctx-%d", len(c.prCtx)+1)
+	}
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now()
+	}
+	c.prCtx = append(c.prCtx, item)
+	return nil
+}
+
+// ListPrContext returns items for the PR, newest first.
+func (c *ContextStore) ListPrContext(_ context.Context, ref ports.PrRef) ([]store.PrContextItem, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []store.PrContextItem
+	for _, it := range c.prCtx {
+		if it.TenantId == ref.TenantId && it.RepoId == ref.RepoId && it.PrNumber == ref.PrNumber {
+			out = append(out, it)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// DeletePrContextItem removes one item.
+func (c *ContextStore) DeletePrContextItem(_ context.Context, itemId string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, it := range c.prCtx {
+		if it.ItemId == itemId {
+			c.prCtx = append(c.prCtx[:i], c.prCtx[i+1:]...)
+			return nil
+		}
 	}
 	return nil
 }

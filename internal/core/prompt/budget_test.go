@@ -99,5 +99,41 @@ func TestAssemble_DiffNeverTrimmed_EvenIfOverflow(t *testing.T) {
 func TestSection_String(t *testing.T) {
 	assert.Equal(t, "past_reviews", SectionPastReviews.String())
 	assert.Equal(t, "related_code", SectionRelatedCode.String())
+	assert.Equal(t, "context", SectionContext.String())
 	assert.Equal(t, "rules", SectionRules.String())
+}
+
+func TestAssemble_ContextDropsBeforeRules(t *testing.T) {
+	in := Inputs{
+		SystemPrompt: "s",
+		Diff:         "d",
+		Context: []ContextSection{
+			{Source: "jira", Title: "PROJ-1", Body: strings.Repeat("c", 200)},
+		},
+		Rules:              []string{strings.Repeat("r", 200)},
+		ClosingInstruction: "x",
+	}
+	a := Assemble(in, 100, lengthEstimator)
+	require.False(t, a.DiffOverflow)
+	// PastReviews and RelatedCode are empty (skipped), Context drops first, then Rules.
+	require.Equal(t, []Section{SectionContext, SectionRules}, a.Dropped)
+	assert.NotContains(t, a.UserPrompt, "[CONTEXT]")
+}
+
+func TestAssemble_ContextKeptWhenFits(t *testing.T) {
+	in := Inputs{
+		SystemPrompt: "s",
+		Diff:         "d",
+		Context: []ContextSection{
+			{Source: "jira", Title: "PROJ-1", Body: "fix the bug"},
+		},
+		ClosingInstruction: "x",
+	}
+	a := Assemble(in, 1_000_000, lengthEstimator)
+	require.False(t, a.DiffOverflow)
+	assert.Empty(t, a.Dropped)
+	assert.Contains(t, a.UserPrompt, "[CONTEXT]")
+	assert.Contains(t, a.UserPrompt, "jira")
+	assert.Contains(t, a.UserPrompt, "PROJ-1")
+	assert.Contains(t, a.UserPrompt, "fix the bug")
 }

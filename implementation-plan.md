@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 4 + 4.5 (admin UI) complete; slice 5 next
+**Status:** Slice 4 + 4.5 (admin UI) + 4.6 (per-repo config + issue trackers + ad-hoc context) complete; slice 4.7 (limits + retention + ops) next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -45,6 +45,8 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | 3. Retrieval + backfill | **Complete** | Live retrievers wired into the review pipeline (one shared diff embedding → code + comment vector search; rules scope-matched in-memory). Format helpers render `<file>:lines (symbol)`, `[OUTCOME] <file>`, `title\ndescription`. `cmd/backfill-cli` paginates GitHub Search closed-PR results, ingests review comments + diff hunks + reactions, embeds via the cache (hash dedup), upserts with `source='human'` and `RETURNING comment_id` so re-runs return the stable id. New tests: 4 backfill unit tests + 4 format tests + a storepostgres idempotency test (8 contract tests total). |
 | 4. Rules + feedback + observability | **Complete** | rulessourcegit (git CLI clone + `**` glob walk), rulessync pipeline (frontmatter+body parser, cached embeddings, tombstoning), feedback pipeline (reactions + replies; implicit line-changed deferred), gateway routes reactions+replies to the feedback queue, obsotel adapter (OTLP HTTP for traces + metrics; stdout fallback on init failure), OTel collector service + dev.toml flip to `sink="otel"`. New tests: 8 feedback pipeline tests + 7 rulessync parser tests + 3 rulessourcegit glob tests. All packages build + test green. |
 | 4.5. Admin web UI + import/export | **Complete** | New `app_settings` table (migration 006), `SettingsStore` port + Postgres adapter + fake + contract test. Hybrid config overlay: TOML bootstrap, `app_settings` overlays runtime-tunable keys (rules URL, cost caps, tenant info, model choices, observability sink/endpoint). New `cmd/admin-ui` binary on `:8090` with chi router + html/template; password + signed-cookie session auth; GitHub OAuth as a second login path (org-membership check). Dashboard, settings editor, config import/export (TOML), selective DB export/import (code_chunks + rules + review_comments as JSON), scheduled auto-export to a configured directory. Worker boot order now `PickStores → ApplyOverlay → PickObservability` so live setting changes are visible after a restart. New tests: 15 admin handler/session tests + 6 overlay tests + 1 storepostgres settings contract test. |
+| 4.6. Per-repo config + issue trackers + ad-hoc context | **Complete** | New `ContextProvider` port + 5 adapters: `contextrepoinstructions` (DB-assigned named sets + `.codereviewer.md` file override), `contextjira` (REST + email/API token), `contextgithubissues` (reuses GitHub App via `vcsgithub.Source.Client()`), `contextlinear` (GraphQL + API key + optional team-prefix allow-list), `contextadhoc` (reads operator-attached items). Migration 007 adds `instruction_sets`, `repo_instruction_sets`, `pr_context_items`. `VcsSource.FetchPrMeta` added so providers can scan title/branch/body for issue keys. `/context <body>` slash command + admin UI pages for instruction-set CRUD, repo assignment, and per-PR context (text / file upload / URL fetch with allow-list). Prompt assembly grows a new `[CONTEXT]` section with drop-order between `[RELATED CODE]` and `[APPLICABLE RULES]`. New tests: 8 issue-key extractor tests + 4 repo-instructions provider tests + 2 ad-hoc provider tests + 1 URL allow-list test + 2 prompt-assembly Context tests. |
+| 4.7. Limits, retention, operability hardening | Not started | Adds janitor goroutine for retention sweeps (`pr_runs`, `feedback_events`, `pr_context_items` with operator-tunable windows), LRU on `embedding_cache`, rotation on auto-export files, webhook body cap, `/login` and `/github/webhook` rate limits, PII scrubber in the logger layer, recent-`pr_runs` admin viewer + retry button, repo enable/disable from admin UI. |
 | 5. EC2 deploy profile | Not started | |
 
 ---
@@ -635,6 +637,35 @@ Conventions:
 - **Overlay string values are env-expanded at apply time.** `${VAR}` references in any overlay string value (e.g. `observability.otlp_endpoint = ${OTEL_ENDPOINT}`) resolve from the worker's environment, so the same exported settings file can target docker-compose (where `otel-collector` is a service hostname) and EC2 (where it isn't). Missing variables expand to empty.
 - **No retention policy on auto-export files.** The scheduler appends new files; pruning is the operator's problem. The export volume is a docker named volume, so disk pressure is at least bounded by the host.
 - **OAuth callback URL is fixed at boot.** It comes from `admin.github_oauth.callback_url` in TOML. Multiple admin-ui replicas serving different hostnames would need a stable URL fronted by a load balancer.
+
+---
+
+# Slice 4.6 — Per-repo config, issue trackers, ad-hoc context
+
+**Goal:** the reviewer brings PR-specific external context (linked tickets, design docs, operator notes) and per-repo conventions into the prompt without code changes.
+
+**Adds:**
+- `ports.ContextProvider` + `ports.ContextItem`: one method `Fetch(ctx, PrRef) ([]ContextItem, error)`. Provider failures are absorbed silently; one source can't break a review.
+- Migration 007: `instruction_sets`, `repo_instruction_sets`, `pr_context_items`. `ContextStore` port + Postgres adapter + fake.
+- Five provider adapters: `contextrepoinstructions`, `contextjira`, `contextgithubissues`, `contextlinear`, `contextadhoc`. Each lights up only when its config block is populated; repo-instructions and ad-hoc are always-on.
+- `VcsSource.FetchPrMeta(ctx, PrRef) (PrMeta, error)` so trackers can scan PR title/branch/body for issue references.
+- `vcsgithub.Source.Client()` exposes the authenticated go-github client to `contextgithubissues` so it reuses the App's auth.
+- `/context <body>` slash command in the webhook gateway; admin UI pages for instruction-set CRUD, repo→set assignment, and per-PR context attachment (text / file / URL-with-allow-list).
+- Prompt assembly: new `[CONTEXT]` section between `[PAST REVIEWS]` and `[APPLICABLE RULES]`; drop order is `PastReviews → RelatedCode → Context → Rules`. ContextItem.Priority sorts items within the section.
+
+**Done when:** posting `/context here is the design doc URL` on a PR feeds that body into the next review prompt under `[CONTEXT]`. Adding `https://acme.atlassian.net` to `[context].jira.base_url` makes the reviewer summarize any `PROJ-123` referenced in PR titles. A `.codereviewer.md` at the repo root overrides the assigned instruction set.
+
+## Slice 4.6 deviations from the design
+
+- **Five separate provider packages instead of one shared client.** JIRA, GitHub Issues, and Linear each construct their own HTTP client and auth path. Cross-adapter imports are disallowed by the architecture rule (`internal/adapters/<x>` must not import other adapters), so sharing is via a public `Client()` accessor on `vcsgithub.Source` rather than a shared client struct. The duplication is ~80 lines per provider.
+- **Issue-key extraction is regex-based, not GitHub Linking API.** GitHub exposes a "linked issues" endpoint for PRs, but it requires the closing-keyword phrasing (`Closes #123`). We additionally surface any `#N` or `OWNER/REPO#N` reference anywhere in the title/branch/body. Trade-off: more recall, occasional false positives from quoted text.
+- **JIRA description rendered via ad-hoc ADF walker.** Atlassian Document Format is a nested JSON tree. We extract the concatenated `text` leaves and add newlines on paragraph/heading/listItem boundaries. Lists, tables, panels, and inline formatting are rendered as plain text. Good enough for prompt context; not a full ADF renderer.
+- **Linear shares the JIRA-style key shape (`ABC-123`).** Both trackers will pick up the same regex matches. The Linear adapter's `team_prefixes` allow-list narrows it to known Linear teams; without it, Linear will probe every `ABC-N` it sees, including JIRA ones. JIRA returns 404 for unknown keys cheaply so the opposite direction is mostly harmless.
+- **URL fetch uses a host allow-list, not URL allow-list.** Configured by `[context].allowed_url_hosts`. The fetcher rejects anything off the list before issuing a request. No path-level granularity, no SSRF guard beyond the allow-list (operator must avoid adding hosts that proxy to internal endpoints).
+- **No size budget enforcement on individual context items at prompt time.** Each provider returns whatever the upstream gives it; the prompt assembler drops the whole `[CONTEXT]` section under pressure rather than trimming items. A very long JIRA description could push other sections out. Items can be priority-sorted (higher kept first) but not individually shrunk.
+- **`/context` does not currently respond on the PR.** The slash command writes silently to `pr_context_items` and the next review run picks it up. No "context attached" confirmation comment is posted. Acceptable for slice 4.6; trivial to add when `/context` UX is exercised.
+- **`.codereviewer.md` is hard-coded at the repo root and on the PR's head sha.** No per-directory file, no inheritance from the default branch. If a repo's `.codereviewer.md` is removed in the PR, the assigned set takes back over.
+- **Admin UI doesn't render the instruction-set body as markdown.** Stored as markdown, fed to the LLM as markdown, but the admin form shows raw text. A live preview is deferred.
 
 ---
 

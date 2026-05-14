@@ -89,6 +89,7 @@ func truncateAll(t *testing.T) {
 	tables := []string{
 		"feedback_events", "code_chunks", "review_comments", "rules",
 		"pr_runs", "cost_caps", "embedding_cache", "job_idempotency",
+		"pr_context_items", "repo_instruction_sets", "instruction_sets",
 		"app_settings", "repos", "tenants",
 	}
 	for _, table := range tables {

@@ -64,19 +64,20 @@ func (s *stopwatch) Kv() []any {
 
 // Deps holds the pipeline's collaborators. Construct via NewPipeline.
 type Deps struct {
-	Vcs            ports.VcsSource
-	Llm            ports.LlmGateway
-	Clock          ports.Clock
-	Obs            ports.Obs
-	CodeChunks     store.CodeChunkStore
-	Comments       store.CommentStore
-	Rules          store.RuleStore
-	PrRuns         store.PrRunStore
-	CostCaps       store.CostCapStore
-	EmbeddingCache store.EmbeddingCache
-	TokenCap       int    // 0 = default
-	SystemPrompt   string // empty = default
-	EmbeddingModel string // empty = adapter default
+	Vcs              ports.VcsSource
+	Llm              ports.LlmGateway
+	Clock            ports.Clock
+	Obs              ports.Obs
+	CodeChunks       store.CodeChunkStore
+	Comments         store.CommentStore
+	Rules            store.RuleStore
+	PrRuns           store.PrRunStore
+	CostCaps         store.CostCapStore
+	EmbeddingCache   store.EmbeddingCache
+	ContextProviders []ports.ContextProvider
+	TokenCap         int    // 0 = default
+	SystemPrompt     string // empty = default
+	EmbeddingModel   string // empty = adapter default
 }
 
 // Pipeline is the per-PR review use case.
@@ -186,6 +187,9 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	pastReviews := retrieval.FormatComments(commentHits)
 	ruleStrings := retrieval.FormatRules(ruleHits)
 
+	contextSections := p.fetchContext(ctx, ref)
+	sw.Mark("fetch_context")
+
 	tokenCap := p.deps.TokenCap
 	if costCap.PerPrTokenCap > 0 && costCap.PerPrTokenCap < tokenCap {
 		tokenCap = costCap.PerPrTokenCap
@@ -195,6 +199,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		Diff:               diff.Content,
 		RelatedCode:        related,
 		PastReviews:        pastReviews,
+		Context:            contextSections,
 		Rules:              ruleStrings,
 		ClosingInstruction: prompt.DefaultClosingInstruction,
 	}, tokenCap, func(s string) int { return p.deps.Llm.EstimateTokens(s, "") })
@@ -382,4 +387,65 @@ func summaryBody(n int, hasHighSeverity bool) string {
 		return fmt.Sprintf("Reviewed; %d comments (bug/security flagged).", n)
 	}
 	return fmt.Sprintf("Reviewed; %d comments.", n)
+}
+
+// fetchContext invokes each configured ContextProvider in turn and
+// flattens their items into the prompt's ContextSection list, sorted
+// by Priority (descending). Providers are isolated: one provider's
+// failure does not prevent others from contributing — that's the
+// provider's own contract, but we add a defensive recover here too.
+func (p *Pipeline) fetchContext(ctx context.Context, ref ports.PrRef) []prompt.ContextSection {
+	if len(p.deps.ContextProviders) == 0 {
+		return nil
+	}
+	type scored struct {
+		section  prompt.ContextSection
+		priority int
+	}
+	var collected []scored
+	for _, cp := range p.deps.ContextProviders {
+		items := p.safeFetch(ctx, cp, ref)
+		for _, it := range items {
+			if strings.TrimSpace(it.Body) == "" {
+				continue
+			}
+			collected = append(collected, scored{
+				section: prompt.ContextSection{
+					Source: it.Source,
+					Title:  it.Title,
+					Body:   it.Body,
+				},
+				priority: it.Priority,
+			})
+		}
+	}
+	// Stable insertion sort by priority desc — small N (typically <20),
+	// preserving provider order for equal priorities.
+	for i := 1; i < len(collected); i++ {
+		for j := i; j > 0 && collected[j].priority > collected[j-1].priority; j-- {
+			collected[j], collected[j-1] = collected[j-1], collected[j]
+		}
+	}
+	out := make([]prompt.ContextSection, len(collected))
+	for i, c := range collected {
+		out[i] = c.section
+	}
+	return out
+}
+
+func (p *Pipeline) safeFetch(ctx context.Context, cp ports.ContextProvider, ref ports.PrRef) (items []ports.ContextItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.deps.Obs.Logger.Error("context provider panicked",
+				"provider", cp.Name(), "recover", fmt.Sprintf("%v", r))
+			items = nil
+		}
+	}()
+	items, err := cp.Fetch(ctx, ref)
+	if err != nil {
+		p.deps.Obs.Logger.Warn("context provider failed",
+			"provider", cp.Name(), "err", err.Error())
+		return nil
+	}
+	return items
 }

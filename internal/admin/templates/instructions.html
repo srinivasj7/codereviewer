@@ -1,0 +1,89 @@
+{{define "body"}}
+<section>
+<h1>Instruction sets</h1>
+<p class="muted">Reusable review instructions assigned to one or more repos. A <code>.codereviewer.md</code> file at the repo root overrides whatever set is assigned here.</p>
+
+{{if .InstructionSets}}
+<table>
+<thead><tr><th>Name</th><th>Assigned repos</th><th>Last updated</th><th></th></tr></thead>
+<tbody>
+{{range .InstructionSets}}
+<tr>
+  <td><strong>{{.Name}}</strong></td>
+  <td>
+    {{range .AssignedRepos}}<code>{{.}}</code><br>{{end}}
+    {{if not .AssignedRepos}}<span class="muted">none</span>{{end}}
+  </td>
+  <td><span class="muted">{{.UpdatedAt}}<br>by {{.UpdatedBy}}</span></td>
+  <td>
+    <form method="POST" action="/instructions" class="inline">
+      <input type="hidden" name="action" value="delete">
+      <input type="hidden" name="set_id" value="{{.SetId}}">
+      <button class="btn-secondary" type="submit" onclick="return confirm('Delete {{.Name}}?')">delete</button>
+    </form>
+  </td>
+</tr>
+<tr>
+  <td colspan="4">
+    <form method="POST" action="/instructions">
+      <input type="hidden" name="action" value="upsert">
+      <input type="hidden" name="set_id" value="{{.SetId}}">
+      <div class="row">
+        <input type="text" name="name" value="{{.Name}}" placeholder="Name">
+        <textarea name="body" placeholder="Markdown body…">{{.Body}}</textarea>
+      </div>
+      <div style="margin-top: 0.5rem;">
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{end}}
+</section>
+
+<section>
+<h2>Add a new set</h2>
+<form method="POST" action="/instructions">
+  <input type="hidden" name="action" value="upsert">
+  <div style="margin-bottom: 0.5rem;">
+    <input type="text" name="name" placeholder="Set name (e.g. Go services)" required>
+  </div>
+  <textarea name="body" placeholder="Markdown body — describe the conventions reviewers should follow…" required></textarea>
+  <div style="margin-top: 0.5rem;"><button type="submit">Create</button></div>
+</form>
+</section>
+
+<section>
+<h2>Repository assignments</h2>
+{{if .Repos}}
+<table>
+<thead><tr><th>Repo</th><th>Assigned set</th></tr></thead>
+<tbody>
+{{range .Repos}}
+<tr>
+  <td><code>{{.RepoId}}</code></td>
+  <td>
+    <form method="POST" action="/instructions" class="inline">
+      <input type="hidden" name="action" value="assign">
+      <input type="hidden" name="repo_id" value="{{.RepoId}}">
+      <select name="set_id" onchange="this.form.submit()">
+        <option value="">— none —</option>
+        {{$cur := .AssignedSetId}}
+        {{range $.InstructionSets}}
+          <option value="{{.SetId}}" {{if eq .SetId $cur}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </form>
+  </td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No repos registered yet. They auto-register when the gateway receives the first webhook.</p>
+{{end}}
+</section>
+{{end}}

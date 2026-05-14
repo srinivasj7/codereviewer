@@ -26,8 +26,8 @@ Rules for output:
 const DefaultClosingInstruction = "Emit the JSON array now. No prose, no markdown fences."
 
 // buildUserPrompt renders the user-turn payload in the canonical order:
-// diff, related code, past reviews, rules, closing.
-func buildUserPrompt(diff string, related, pastReviews, rules []string, closing string) string {
+// diff, related code, past reviews, context, rules, closing.
+func buildUserPrompt(diff string, related, pastReviews []string, ctx []ContextSection, rules []string, closing string) string {
 	var b strings.Builder
 	b.WriteString("[DIFF]\n")
 	b.WriteString(diff)
@@ -43,6 +43,18 @@ func buildUserPrompt(diff string, related, pastReviews, rules []string, closing 
 		b.WriteString("\n[PAST REVIEWS — with outcomes]\n")
 		for _, r := range pastReviews {
 			b.WriteString(r)
+			b.WriteString("\n")
+		}
+	}
+	if len(ctx) > 0 {
+		b.WriteString("\n[CONTEXT]\n")
+		for _, c := range ctx {
+			b.WriteString("--- ")
+			b.WriteString(c.Source)
+			b.WriteString(": ")
+			b.WriteString(c.Title)
+			b.WriteString(" ---\n")
+			b.WriteString(c.Body)
 			b.WriteString("\n")
 		}
 	}

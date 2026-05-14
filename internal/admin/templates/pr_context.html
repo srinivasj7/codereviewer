@@ -1,0 +1,86 @@
+{{define "body"}}
+<section>
+<h1>Per-PR context</h1>
+<p class="muted">Attach a design doc, ticket excerpt, or note to a specific PR. The next review run will inject it under the <code>[CONTEXT]</code> section of the prompt. Operators can also post <code>/context &lt;body&gt;</code> as a PR comment.</p>
+
+<form method="GET" action="/pr-context">
+  <div class="row">
+    <input type="text" name="repo" placeholder="owner/repo" value="{{.QueryRepo}}" required>
+    <input type="number" name="pr" placeholder="PR number" value="{{.QueryPr}}" required min="1">
+    <button type="submit">Load</button>
+  </div>
+</form>
+</section>
+
+{{if .HasPr}}
+<section>
+<h2>Existing items — <code>{{.QueryRepo}}#{{.QueryPr}}</code></h2>
+{{if .Items}}
+<table>
+<thead><tr><th>Source</th><th>Title</th><th>Body</th><th>Attached</th><th></th></tr></thead>
+<tbody>
+{{range .Items}}
+<tr>
+  <td><code>{{.Source}}</code></td>
+  <td>{{.Title}}</td>
+  <td><pre style="white-space: pre-wrap; margin: 0; max-height: 8rem; overflow-y: auto;">{{.Body}}</pre></td>
+  <td><span class="muted">{{.CreatedAt}}<br>by {{.CreatedBy}}</span></td>
+  <td>
+    <form method="POST" action="/pr-context" class="inline">
+      <input type="hidden" name="action" value="delete">
+      <input type="hidden" name="item_id" value="{{.ItemId}}">
+      <input type="hidden" name="repo" value="{{$.QueryRepo}}">
+      <input type="hidden" name="pr" value="{{$.QueryPr}}">
+      <button class="btn-secondary" type="submit">delete</button>
+    </form>
+  </td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No context attached yet.</p>
+{{end}}
+</section>
+
+<section>
+<h2>Attach text</h2>
+<form method="POST" action="/pr-context">
+  <input type="hidden" name="action" value="attach-text">
+  <input type="hidden" name="repo" value="{{.QueryRepo}}">
+  <input type="hidden" name="pr" value="{{.QueryPr}}">
+  <div style="margin-bottom: 0.5rem;">
+    <input type="text" name="title" placeholder="Title (optional)">
+  </div>
+  <textarea name="body" placeholder="Paste design doc, ticket description, etc." required></textarea>
+  <div style="margin-top: 0.5rem;"><button type="submit">Attach</button></div>
+</form>
+</section>
+
+<section>
+<h2>Attach file</h2>
+<form method="POST" action="/pr-context" enctype="multipart/form-data">
+  <input type="hidden" name="action" value="attach-file">
+  <input type="hidden" name="repo" value="{{.QueryRepo}}">
+  <input type="hidden" name="pr" value="{{.QueryPr}}">
+  <input type="file" name="file" required>
+  <button type="submit">Upload</button>
+</form>
+</section>
+
+<section>
+<h2>Attach URL</h2>
+<p class="muted">Allowed hosts: {{if .AllowedHosts}}{{range .AllowedHosts}}<code>{{.}}</code> {{end}}{{else}}<em>none configured — URL fetch disabled</em>{{end}}</p>
+<form method="POST" action="/pr-context">
+  <input type="hidden" name="action" value="attach-url">
+  <input type="hidden" name="repo" value="{{.QueryRepo}}">
+  <input type="hidden" name="pr" value="{{.QueryPr}}">
+  <div class="row">
+    <input type="url" name="url" placeholder="https://…" required>
+    <input type="text" name="title" placeholder="Title (optional)">
+  </div>
+  <div style="margin-top: 0.5rem;"><button type="submit" {{if not .AllowedHosts}}disabled{{end}}>Fetch &amp; attach</button></div>
+</form>
+</section>
+{{end}}
+{{end}}

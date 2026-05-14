@@ -20,6 +20,8 @@ type Vcs struct {
 	mu               sync.Mutex
 	diffByRef        map[string]ports.UnifiedDiff
 	prComments       map[string][]ports.HumanComment
+	prMeta           map[string]ports.PrMeta
+	filesAt          map[string]string
 	closedPrs        []int
 	postReviewCalls  []PostReviewCall
 	updateCheckCalls []UpdateCheckCall
@@ -88,9 +90,47 @@ func (v *Vcs) FetchDiff(_ context.Context, ref ports.PrRef) (ports.UnifiedDiff, 
 	return diff, nil
 }
 
-// FetchFileAt is not implemented for the fake.
-func (v *Vcs) FetchFileAt(_ context.Context, _ ports.RepoId, _, _ string) (string, error) {
-	return "", errors.New("fake vcs: FetchFileAt not implemented")
+// FetchFileAt returns the content installed via SetFileAt, or empty
+// string + an error when no content is registered (some providers
+// treat the empty-string return as "absent").
+func (v *Vcs) FetchFileAt(_ context.Context, repoId ports.RepoId, sha, path string) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := string(repoId) + "@" + sha + ":" + path
+	if c, ok := v.filesAt[key]; ok {
+		return c, nil
+	}
+	return "", errors.New("fake vcs: no file registered for " + key)
+}
+
+// SetFileAt installs the content returned by FetchFileAt.
+func (v *Vcs) SetFileAt(repoId ports.RepoId, sha, path, content string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.filesAt == nil {
+		v.filesAt = make(map[string]string)
+	}
+	v.filesAt[string(repoId)+"@"+sha+":"+path] = content
+}
+
+// FetchPrMeta returns the meta installed via SetPrMeta, or zero-value.
+func (v *Vcs) FetchPrMeta(_ context.Context, ref ports.PrRef) (ports.PrMeta, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if m, ok := v.prMeta[diffKey(ref)]; ok {
+		return m, nil
+	}
+	return ports.PrMeta{}, nil
+}
+
+// SetPrMeta installs the meta returned by FetchPrMeta for ref.
+func (v *Vcs) SetPrMeta(ref ports.PrRef, meta ports.PrMeta) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.prMeta == nil {
+		v.prMeta = make(map[string]ports.PrMeta)
+	}
+	v.prMeta[diffKey(ref)] = meta
 }
 
 // ListChangedFiles returns an empty list.

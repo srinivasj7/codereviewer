@@ -17,4 +17,8 @@ type RepoStore interface {
 	EnsureExists(ctx context.Context, repo ports.RepoRef) error
 	// Get returns the full RepoRef for an id, or found=false if absent.
 	Get(ctx context.Context, repoId ports.RepoId) (ref ports.RepoRef, found bool, err error)
+	// ListByTenant returns all repos for a tenant, ordered by repo_id.
+	// Used by the admin UI to enumerate repos for instruction-set
+	// assignment.
+	ListByTenant(ctx context.Context, tenant ports.TenantId) ([]ports.RepoRef, error)
 }

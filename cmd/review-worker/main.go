@@ -12,10 +12,18 @@ import (
 	"syscall"
 	"time"
 
+	"codereviewer/internal/adapters/contextadhoc"
+	"codereviewer/internal/adapters/contextgithubissues"
+	"codereviewer/internal/adapters/contextjira"
+	"codereviewer/internal/adapters/contextlinear"
+	"codereviewer/internal/adapters/contextrepoinstructions"
+	"codereviewer/internal/adapters/vcsgithub"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/core/pipelines/review"
 	"codereviewer/internal/ports"
+	"codereviewer/internal/ports/store"
+	"codereviewer/internal/schemas"
 )
 
 func main() {
@@ -74,18 +82,20 @@ func run(cfgPath string) error {
 		return fmt.Errorf("llm: %w", err)
 	}
 
+	providers := pickContextProviders(cfg, vcs, stores.Context, obs)
 	pipeline := review.NewPipeline(review.Deps{
-		Vcs:            vcs,
-		Llm:            llm,
-		Clock:          clock,
-		Obs:            obs,
-		CodeChunks:     stores.CodeChunks,
-		Comments:       stores.Comments,
-		Rules:          stores.Rules,
-		PrRuns:         stores.PrRuns,
-		CostCaps:       stores.CostCaps,
-		EmbeddingCache: stores.EmbeddingCache,
-		TokenCap:       cfg.Llm.PerPrTokenCap,
+		Vcs:              vcs,
+		Llm:              llm,
+		Clock:            clock,
+		Obs:              obs,
+		CodeChunks:       stores.CodeChunks,
+		Comments:         stores.Comments,
+		Rules:            stores.Rules,
+		PrRuns:           stores.PrRuns,
+		CostCaps:         stores.CostCaps,
+		EmbeddingCache:   stores.EmbeddingCache,
+		ContextProviders: providers,
+		TokenCap:         cfg.Llm.PerPrTokenCap,
 	})
 
 	sub, err := bus.Consume(ctx, ports.QueueReview, pipeline.Handle)
@@ -106,4 +116,39 @@ func flushObs(shutdown func(context.Context) error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = shutdown(ctx)
+}
+
+// pickContextProviders constructs the enabled context providers based
+// on cfg. Always includes repo-instructions and ad-hoc (cheap and
+// always-relevant). The three issue trackers light up only when their
+// config block is populated. The github-issues provider type-asserts
+// the VcsSource for .Client() so it shares the App's auth; if the VCS
+// adapter isn't vcsgithub.Source, the provider is skipped.
+func pickContextProviders(
+	cfg *schemas.Config,
+	vcs ports.VcsSource,
+	ctxStore store.ContextStore,
+	obs ports.Obs,
+) []ports.ContextProvider {
+	providers := []ports.ContextProvider{
+		contextrepoinstructions.New(vcs, ctxStore, obs),
+		contextadhoc.New(ctxStore, cfg.Context.MaxItemsPerPr, obs),
+	}
+	if cfg.Context.Jira.BaseURL != "" {
+		providers = append(providers,
+			contextjira.New(cfg.Context.Jira.BaseURL, cfg.Context.Jira.Email,
+				cfg.Context.Jira.APIToken, vcs, obs))
+	}
+	if cfg.Context.GithubIssues.Enabled {
+		if gh, ok := vcs.(*vcsgithub.Source); ok {
+			providers = append(providers, contextgithubissues.New(gh.Client(), vcs, obs))
+		} else {
+			obs.Logger.Warn("github-issues context provider enabled but VcsSource is not vcsgithub; skipping")
+		}
+	}
+	if cfg.Context.Linear.APIKey != "" {
+		providers = append(providers,
+			contextlinear.New(cfg.Context.Linear.APIKey, cfg.Context.Linear.TeamPrefixes, vcs, obs))
+	}
+	return providers
 }

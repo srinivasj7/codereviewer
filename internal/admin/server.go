@@ -29,6 +29,8 @@ type Deps struct {
 	Comments store.CommentStore
 	Rules    store.RuleStore
 	PrRuns   store.PrRunStore
+	Repos    store.RepoStore
+	Context  store.ContextStore
 	// Pool is the raw pgxpool for export/import of code_chunks +
 	// review_comments + rules. Held as `any` so the admin package
 	// doesn't import the pgx package directly; the export module
@@ -95,6 +97,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/import/db", s.handleImportDbPOST)
 		r.Get("/export/config", s.handleExportConfig)
 		r.Get("/export/db", s.handleExportDb)
+		r.Get("/instructions", s.handleInstructionsGET)
+		r.Post("/instructions", s.handleInstructionsPOST)
+		r.Get("/pr-context", s.handlePrContextGET)
+		r.Post("/pr-context", s.handlePrContextPOST)
 	})
 
 	return r
@@ -130,6 +136,10 @@ type viewData struct {
 	Fields      []field
 }
 
+// chrome lets renderWith access the embedded viewData on richer view
+// payloads via pointer. Implementations call &payload.viewData here.
+func (v *viewData) chrome() *viewData { return v }
+
 type kv struct{ Key, Value string }
 type counts struct {
 	CodeChunks     int
@@ -143,20 +153,39 @@ type field struct {
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, vd viewData) {
 	vd.Title = name
+	s.populateChrome(r, &vd)
+	s.executeTemplate(w, name, vd)
+}
+
+// renderWith is used by pages that need richer view data than the bare
+// viewData. The payload type must embed viewData so the layout's
+// Title/Authed/Subject/Flash fields resolve via field promotion.
+func (s *Server) renderWith(w http.ResponseWriter, r *http.Request, name string, payload interface {
+	chrome() *viewData
+}) {
+	vd := payload.chrome()
+	vd.Title = name
+	s.populateChrome(r, vd)
+	s.executeTemplate(w, name, payload)
+}
+
+func (s *Server) populateChrome(r *http.Request, vd *viewData) {
 	if sess, err := readSession(r, s.secret); err == nil {
 		vd.Authed = true
 		vd.Subject = sess.Subject
 	}
 	vd.OAuthEnabled = s.deps.Cfg.Admin.GithubOAuth.ClientId != ""
+}
+
+func (s *Server) executeTemplate(w http.ResponseWriter, name string, data any) {
 	tname := name + ".html"
-	// Re-parse the layout+page together so {{define "body"}} resolves.
 	tmpl, err := template.ParseFS(templatesFS, "templates/layout.html", "templates/"+tname)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, "layout", vd); err != nil {
+	if err := tmpl.ExecuteTemplate(w, "layout", data); err != nil {
 		s.deps.Obs.Logger.Error("template render failed", "err", err.Error())
 	}
 }

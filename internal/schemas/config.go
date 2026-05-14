@@ -23,6 +23,7 @@ type Config struct {
 	Gateway       GatewayConfig       `toml:"gateway"`
 	Tenant        TenantConfig        `toml:"tenant"`
 	Admin         AdminConfig         `toml:"admin"`
+	Context       ContextConfig       `toml:"context"`
 }
 
 // AdminConfig configures the admin web UI (cmd/admin-ui).
@@ -120,6 +121,36 @@ type RulesConfig struct {
 	Branch string `toml:"branch"`
 }
 
+// ContextConfig configures the issue-tracker context providers and
+// the ad-hoc URL-fetch allow-list. Disabled providers don't run.
+type ContextConfig struct {
+	Jira             JiraConfig         `toml:"jira"`
+	GithubIssues     GithubIssuesConfig `toml:"github_issues"`
+	Linear           LinearConfig       `toml:"linear"`
+	AllowedUrlHosts  []string           `toml:"allowed_url_hosts"`
+	UrlFetchMaxBytes int                `toml:"url_fetch_max_bytes"` // default 1MB
+	MaxItemsPerPr    int                `toml:"max_items_per_pr"`    // default 10
+}
+
+// JiraConfig — Atlassian REST + email/api-token auth. Disabled if BaseURL empty.
+type JiraConfig struct {
+	BaseURL  string `toml:"base_url"` // https://acme.atlassian.net
+	Email    string `toml:"email"`
+	APIToken string `toml:"api_token"`
+}
+
+// GithubIssuesConfig — reuses the existing GitHub App credentials.
+// Disabled when Enabled=false.
+type GithubIssuesConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
+// LinearConfig — GraphQL + personal API key. Disabled if APIKey empty.
+type LinearConfig struct {
+	APIKey      string   `toml:"api_key"`
+	TeamPrefixes []string `toml:"team_prefixes"` // optional; only keys with these prefixes are fetched
+}
+
 // Validate checks that selected providers are known and required fields
 // are populated for the chosen provider. It does NOT verify external
 // reachability — that's the adapter's job at boot.
@@ -165,6 +196,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Admin.AutoExportHours <= 0 {
 		c.Admin.AutoExportHours = 24
+	}
+	if c.Context.UrlFetchMaxBytes <= 0 {
+		c.Context.UrlFetchMaxBytes = 1 << 20 // 1 MiB
+	}
+	if c.Context.MaxItemsPerPr <= 0 {
+		c.Context.MaxItemsPerPr = 10
 	}
 	return nil
 }

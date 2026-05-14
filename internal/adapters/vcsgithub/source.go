@@ -76,6 +76,12 @@ func New(cfg schemas.VcsConfig) (*Source, error) {
 	}, nil
 }
 
+// Client returns the underlying go-github client so callers that need
+// to hit endpoints beyond the VcsSource port surface (e.g. the
+// github-issues context provider) can reuse the same authenticated
+// transport without re-wiring credentials.
+func (s *Source) Client() *github.Client { return s.client }
+
 func loadPrivateKey(cfg schemas.VcsConfig) ([]byte, error) {
 	if cfg.PrivateKeyPath != "" {
 		b, err := os.ReadFile(cfg.PrivateKeyPath)
@@ -237,6 +243,24 @@ func (s *Source) FetchDiff(ctx context.Context, ref ports.PrRef) (ports.UnifiedD
 		HeadSha: ref.HeadSha,
 		Content: diff,
 		Files:   nil, // parsed by indexer when needed; review pipeline uses Content directly
+	}, nil
+}
+
+// FetchPrMeta returns title, body, and head branch name for the PR.
+// Used by issue-tracker context providers to scan for ticket references.
+func (s *Source) FetchPrMeta(ctx context.Context, ref ports.PrRef) (ports.PrMeta, error) {
+	owner, name, err := parseRepoId(ref.RepoId)
+	if err != nil {
+		return ports.PrMeta{}, err
+	}
+	pr, _, err := s.client.PullRequests.Get(ctx, owner, name, ref.PrNumber)
+	if err != nil {
+		return ports.PrMeta{}, fmt.Errorf("fetch pr meta: %w", err)
+	}
+	return ports.PrMeta{
+		Title:      pr.GetTitle(),
+		Body:       pr.GetBody(),
+		BranchName: pr.GetHead().GetRef(),
 	}, nil
 }
 
