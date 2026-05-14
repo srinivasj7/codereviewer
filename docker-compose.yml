@@ -39,8 +39,10 @@ services:
     volumes:
       - ./docker/litellm-config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
+    # The LiteLLM image is a python:slim derivative with no wget or curl.
+    # Use a built-in `python` one-liner instead so the check actually runs.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:4000/health/liveliness"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys;\nimport urllib.error\ntry:\n urllib.request.urlopen('http://localhost:4000/health/liveliness',timeout=3).read()\nexcept Exception as e:\n sys.exit(1)\n"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -70,7 +72,7 @@ services:
       nats:
         condition: service_healthy
       otel-collector:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "8080:8080"
     env_file: [.env]
@@ -93,7 +95,7 @@ services:
       litellm:
         condition: service_healthy
       otel-collector:
-        condition: service_healthy
+        condition: service_started
     env_file: [.env]
     volumes:
       - ./docker/dev.toml:/app/config.toml:ro
@@ -114,7 +116,7 @@ services:
       litellm:
         condition: service_healthy
       otel-collector:
-        condition: service_healthy
+        condition: service_started
     env_file: [.env]
     volumes:
       - ./docker/dev.toml:/app/config.toml:ro
@@ -133,7 +135,7 @@ services:
       nats:
         condition: service_healthy
       otel-collector:
-        condition: service_healthy
+        condition: service_started
     env_file: [.env]
     volumes:
       - ./docker/dev.toml:/app/config.toml:ro
@@ -187,12 +189,11 @@ services:
       - ./docker/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
       - "4318:4318" # OTLP HTTP
-      - "13133:13133" # health check
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:13133/"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - "13133:13133" # health check (curl from host; no in-container probe)
+    # No healthcheck: this image is distroless with no shell, no wget,
+    # no curl. The collector boots in <1s and the OTLP client retries
+    # silently on connection failure, so downstream `service_started` is
+    # sufficient. To verify the listener from the host, curl :13133.
 
 volumes:
   pg_data:
