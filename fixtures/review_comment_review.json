@@ -1,0 +1,19 @@
+{
+  "action": "created",
+  "comment": {
+    "id": 1000002,
+    "in_reply_to_id": 0,
+    "body": "/review",
+    "path": "",
+    "user": { "login": "alice", "type": "User" }
+  },
+  "pull_request": {
+    "number": 42,
+    "head": { "sha": "abc1234567890123456789012345678901234567" }
+  },
+  "repository": {
+    "name": "verify-repo",
+    "owner": { "login": "verify-org" },
+    "default_branch": "main"
+  }
+}

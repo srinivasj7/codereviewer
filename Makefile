@@ -1,4 +1,4 @@
-.PHONY: build test typecheck lint tidy generate migrate-up dev-review dev-gateway clean help
+.PHONY: build test test-race test-integration verify verify-keep verify-no-stack typecheck lint tidy generate migrate-up dev-review dev-gateway clean help
 
 GO ?= go
 
@@ -7,6 +7,10 @@ help:
 	@echo "  build         - Compile all packages and binaries"
 	@echo "  test          - Run unit tests"
 	@echo "  test-race     - Run unit tests with the race detector (requires CGO)"
+	@echo "  test-integration - Run storepostgres tests against the live container"
+	@echo "  verify        - One-shot local verification: stack + tests + synthetic webhooks"
+	@echo "  verify-keep   - Same as verify, but leave the stack running on exit"
+	@echo "  verify-no-stack - Run verification against an already-running stack"
 	@echo "  typecheck     - Run go vet"
 	@echo "  lint          - Run golangci-lint"
 	@echo "  tidy          - Run go mod tidy"
@@ -33,6 +37,19 @@ test-integration:
 	docker compose up -d postgres
 	@TESTS_POSTGRES_URL=$${TESTS_POSTGRES_URL:-postgres://postgres:dev@localhost:5432/codereviewer?sslmode=disable} \
 	  $(GO) test -count=1 ./internal/adapters/storepostgres/...
+
+# verify runs scripts/verify-local.sh — full local verification of the
+# admin UI, webhook gateway, retention, rate limits, and repo enable/
+# disable using HMAC-signed synthetic webhooks. See scripts/verify-local.sh
+# for the list of checks. No real GitHub or LLM credentials required.
+verify:
+	@bash scripts/verify-local.sh
+
+verify-keep:
+	@bash scripts/verify-local.sh --keep
+
+verify-no-stack:
+	@bash scripts/verify-local.sh --no-stack
 
 typecheck:
 	$(GO) vet ./...

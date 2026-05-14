@@ -1,0 +1,14 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 42,
+    "draft": false,
+    "head": { "sha": "abc1234567890123456789012345678901234567" },
+    "base": { "sha": "def4567890123456789012345678901234567890" }
+  },
+  "repository": {
+    "name": "verify-repo",
+    "owner": { "login": "verify-org" },
+    "default_branch": "main"
+  }
+}

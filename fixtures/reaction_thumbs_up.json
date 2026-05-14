@@ -1,0 +1,10 @@
+{
+  "action": "created",
+  "reaction": {
+    "content": "+1",
+    "user": { "login": "alice" }
+  },
+  "comment": {
+    "id": 999999999
+  }
+}

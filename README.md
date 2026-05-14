@@ -7,6 +7,20 @@ See:
 - [`implementation-plan.md`](./implementation-plan.md) — slice-by-slice build plan and progress
 - [`CLAUDE.md`](./CLAUDE.md) — repo conventions and Claude Code guidance
 
+## Verify locally (no GitHub / LLM credentials required)
+
+```sh
+make verify           # full run: bring up stack, test, fire synthetic webhooks
+make verify-keep      # same, but leaves containers running for inspection
+make verify-no-stack  # skip compose up; run against an already-up stack
+# or directly:
+bash scripts/verify-local.sh [--keep] [--no-stack]
+```
+
+`scripts/verify-local.sh` walks 8 phases: prereqs → env / dummy-PEM bootstrap → `go test` → `compose up` → storepostgres integration tests → HMAC-signed synthetic webhooks (pull_request, /context, reaction, tampered HMAC) → rate-limit + body-cap probes → disabled-repo smoke. It writes a throwaway `.env` and a 2048-bit RSA key on first run, then exits 0 if every check passes.
+
+See [`fixtures/README.md`](./fixtures/README.md) for the canned webhook payloads.
+
 ## Quickstart — full stack in Docker
 
 Prerequisites: Docker Desktop, an OpenAI (or Anthropic) API key, and a GitHub App registered with the permissions in `docs/design.md` Appendix C.
