@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -191,4 +192,13 @@ ORDER BY created_at DESC
 func (s *ContextStore) DeletePrContextItem(ctx context.Context, itemId string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM pr_context_items WHERE item_id = $1`, itemId)
 	return err
+}
+
+// DeletePrContextBefore removes items with created_at < cutoff.
+func (s *ContextStore) DeletePrContextBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM pr_context_items WHERE created_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete pr_context_items: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

@@ -22,10 +22,16 @@ func NewRepoStore() *RepoStore {
 	return &RepoStore{repos: make(map[ports.RepoId]ports.RepoRef)}
 }
 
-// EnsureExists upserts.
+// EnsureExists upserts. Preserves Enabled if a row already exists so
+// auto-registration on webhook never resurrects a disabled repo.
 func (s *RepoStore) EnsureExists(_ context.Context, repo ports.RepoRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.repos[repo.RepoId]; ok {
+		repo.Enabled = existing.Enabled
+	} else {
+		repo.Enabled = true
+	}
 	s.repos[repo.RepoId] = repo
 	return nil
 }
@@ -51,6 +57,20 @@ func (s *RepoStore) ListByTenant(_ context.Context, tenant ports.TenantId) ([]po
 	sort.Slice(out, func(i, j int) bool { return out[i].RepoId < out[j].RepoId })
 	return out, nil
 }
+
+// SetEnabled toggles Enabled on the stored repo.
+func (s *RepoStore) SetEnabled(_ context.Context, repoId ports.RepoId, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.repos[repoId]; ok {
+		r.Enabled = enabled
+		s.repos[repoId] = r
+	}
+	return nil
+}
+
+// Tombstone is a no-op for the fake; tests assert on enabled flag.
+func (s *RepoStore) Tombstone(_ context.Context, _ ports.RepoId) error { return nil }
 
 // PrRunStore is an in-memory PrRunStore that tracks all runs by
 // idempotency key. Used by smoke and budget tests to assert final state.
@@ -135,6 +155,45 @@ func (s *PrRunStore) AllRuns() []store.PrRun {
 		out = append(out, r)
 	}
 	return out
+}
+
+// ListAcrossRepos returns the most recent runs across all repos for tenant.
+func (s *PrRunStore) ListAcrossRepos(_ context.Context, tenant ports.TenantId, limit int) ([]store.PrRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.PrRun
+	for _, r := range s.runs {
+		if r.Ref.TenantId == tenant {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// GetByRunId returns one row by id.
+func (s *PrRunStore) GetByRunId(_ context.Context, runId store.RunId) (store.PrRun, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[runId]
+	return r, ok, nil
+}
+
+// DeleteBefore removes runs older than cutoff.
+func (s *PrRunStore) DeleteBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var deleted int64
+	for id, r := range s.runs {
+		if r.StartedAt.Before(cutoff) {
+			delete(s.runs, id)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 // CostCapStore is an in-memory CostCapStore.
@@ -434,6 +493,23 @@ func (s *FeedbackStore) Append(_ context.Context, e store.FeedbackEvent) error {
 	return nil
 }
 
+// DeleteBefore removes events observed_at < cutoff.
+func (s *FeedbackStore) DeleteBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var kept []store.FeedbackEvent
+	var deleted int64
+	for _, e := range s.events {
+		if e.ObservedAt.Before(cutoff) {
+			deleted++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	s.events = kept
+	return deleted, nil
+}
+
 // ListForComment returns events for a comment id.
 func (s *FeedbackStore) ListForComment(_ context.Context, id store.CommentId) ([]store.FeedbackEvent, error) {
 	s.mu.Lock()
@@ -479,6 +555,27 @@ func (c *EmbeddingCache) PutMany(_ context.Context, entries []store.EmbeddingCac
 		c.entries[e.Hash] = e.Embedding
 	}
 	return nil
+}
+
+// EvictToMax trims to maxRows; order is the map's iteration order
+// (non-deterministic) which is good enough for unit tests that only
+// care about size, not which keys survive.
+func (c *EmbeddingCache) EvictToMax(_ context.Context, maxRows int) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if maxRows <= 0 || len(c.entries) <= maxRows {
+		return 0, nil
+	}
+	toDelete := len(c.entries) - maxRows
+	deleted := int64(0)
+	for k := range c.entries {
+		if deleted >= int64(toDelete) {
+			break
+		}
+		delete(c.entries, k)
+		deleted++
+	}
+	return deleted, nil
 }
 
 // ContextStore is a minimal in-memory ContextStore.
@@ -611,6 +708,23 @@ func (c *ContextStore) DeletePrContextItem(_ context.Context, itemId string) err
 		}
 	}
 	return nil
+}
+
+// DeletePrContextBefore removes items created_at < cutoff.
+func (c *ContextStore) DeletePrContextBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var kept []store.PrContextItem
+	var deleted int64
+	for _, it := range c.prCtx {
+		if it.CreatedAt.Before(cutoff) {
+			deleted++
+			continue
+		}
+		kept = append(kept, it)
+	}
+	c.prCtx = kept
+	return deleted, nil
 }
 
 // SettingsStore is a minimal in-memory SettingsStore.

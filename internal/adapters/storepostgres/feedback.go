@@ -3,6 +3,7 @@ package storepostgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,4 +59,13 @@ ORDER BY observed_at ASC
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// DeleteBefore removes feedback_events with observed_at < cutoff.
+func (s *FeedbackStore) DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM feedback_events WHERE observed_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete feedback_events: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

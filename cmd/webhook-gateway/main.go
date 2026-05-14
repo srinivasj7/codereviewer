@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -91,8 +92,12 @@ func run(cfgPath string) error {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
+	if cfg.RateLimit.WebhookMaxBodyBytes > 0 {
+		r.Use(middleware.RequestSize(int64(cfg.RateLimit.WebhookMaxBodyBytes)))
+	}
+	webhookLimiter := newWebhookLimiter(cfg.RateLimit.WebhookPerSecond)
 	r.Get("/health", gw.health)
-	r.Post("/github/webhook", gw.webhook)
+	r.With(webhookLimiter).Post("/github/webhook", gw.webhook)
 
 	srv := &http.Server{
 		Addr:              cfg.Gateway.ListenAddr,
@@ -122,6 +127,77 @@ func flushObs(shutdown func(context.Context) error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = shutdown(ctx)
+}
+
+// newWebhookLimiter returns a chi-compatible middleware that rejects
+// any IP exceeding perSecond requests per second. Implementation: a
+// per-IP token bucket capped at perSecond, refilled once per second.
+// Concurrency-safe via sync.Mutex; the contention is fine at the
+// expected scale (a few hundred req/sec across all IPs).
+func newWebhookLimiter(perSecond int) func(http.Handler) http.Handler {
+	if perSecond <= 0 {
+		// No-op middleware.
+		return func(next http.Handler) http.Handler { return next }
+	}
+	state := &webhookLimiterState{
+		perSecond: perSecond,
+		bucket:    make(map[string]*webhookBucket),
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !state.allow(webhookClientIP(r)) {
+				http.Error(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+type webhookLimiterState struct {
+	mu        sync.Mutex
+	perSecond int
+	bucket    map[string]*webhookBucket
+}
+
+type webhookBucket struct {
+	tokens   int
+	lastFill time.Time
+}
+
+func (s *webhookLimiterState) allow(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	b, ok := s.bucket[ip]
+	if !ok {
+		s.bucket[ip] = &webhookBucket{tokens: s.perSecond - 1, lastFill: now}
+		return true
+	}
+	// Refill: one full bucket per second of elapsed time.
+	elapsed := now.Sub(b.lastFill)
+	if elapsed >= time.Second {
+		b.tokens = s.perSecond
+		b.lastFill = now
+	}
+	if b.tokens <= 0 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func webhookClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if i := strings.LastIndexByte(r.RemoteAddr, ':'); i >= 0 {
+		return r.RemoteAddr[:i]
+	}
+	return r.RemoteAddr
 }
 
 type gateway struct {

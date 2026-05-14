@@ -15,7 +15,9 @@ import (
 )
 
 // New returns an Obs bundle writing to stdout in JSON. ServiceName is
-// added as a base attribute on every log line.
+// added as a base attribute on every log line. The logger is wrapped
+// with a PII/payload scrubber as belt-and-suspenders against the
+// "no payload logging" rule — see scrubber.go.
 func New(serviceName string) ports.Obs {
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
 	logger := slog.New(handler)
@@ -25,7 +27,7 @@ func New(serviceName string) ports.Obs {
 	return ports.Obs{
 		Tracer: noopTracer{},
 		Meter:  newMemoryMeter(),
-		Logger: &slogLogger{l: logger},
+		Logger: NewScrubbingLogger(&slogLogger{l: logger}, 0),
 	}
 }
 

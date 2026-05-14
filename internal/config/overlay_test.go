@@ -112,7 +112,12 @@ func TestOverlayKeys_CoveredByApply(t *testing.T) {
 		v := "x"
 		// Numeric keys need parseable values.
 		switch k {
-		case "llm.per_pr_token_cap":
+		case "llm.per_pr_token_cap",
+			"retention.pr_runs_days",
+			"retention.feedback_events_days",
+			"retention.pr_context_items_days",
+			"retention.embedding_cache_max_rows",
+			"retention.auto_export_max_files":
 			v = "42"
 		case "cost.daily_usd_cap_default":
 			v = "1.5"

@@ -31,6 +31,7 @@ type Deps struct {
 	PrRuns   store.PrRunStore
 	Repos    store.RepoStore
 	Context  store.ContextStore
+	Bus      ports.MessageBus
 	// Pool is the raw pgxpool for export/import of code_chunks +
 	// review_comments + rules. Held as `any` so the admin package
 	// doesn't import the pgx package directly; the export module
@@ -41,12 +42,13 @@ type Deps struct {
 
 // Server is the admin web app.
 type Server struct {
-	deps       Deps
-	tmpl       *template.Template
-	password   string
-	secret     string
-	sessionTTL time.Duration
-	secure     bool
+	deps         Deps
+	tmpl         *template.Template
+	password     string
+	secret       string
+	sessionTTL   time.Duration
+	secure       bool
+	loginLimiter *rateLimiter
 }
 
 // New constructs a Server. password and sessionSecret are provided by
@@ -63,14 +65,26 @@ func New(deps Deps, password, sessionSecret string, secure bool) (*Server, error
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
+	rl := newRateLimiter(
+		max(deps.Cfg.RateLimit.LoginAttempts, 1),
+		time.Duration(max(deps.Cfg.RateLimit.LoginWindowMinutes, 1))*time.Minute,
+	)
 	return &Server{
-		deps:       deps,
-		tmpl:       t,
-		password:   password,
-		secret:     sessionSecret,
-		sessionTTL: time.Duration(deps.Cfg.Admin.SessionMinutes) * time.Minute,
-		secure:     secure,
+		deps:         deps,
+		tmpl:         t,
+		password:     password,
+		secret:       sessionSecret,
+		sessionTTL:   time.Duration(deps.Cfg.Admin.SessionMinutes) * time.Minute,
+		secure:       secure,
+		loginLimiter: rl,
 	}, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Router returns the configured chi router.
@@ -101,6 +115,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/instructions", s.handleInstructionsPOST)
 		r.Get("/pr-context", s.handlePrContextGET)
 		r.Post("/pr-context", s.handlePrContextPOST)
+		r.Get("/runs", s.handleRunsGET)
+		r.Post("/runs/retry", s.handleRunsRetryPOST)
+		r.Get("/repos", s.handleReposGET)
+		r.Post("/repos/toggle", s.handleReposTogglePOST)
 	})
 
 	return r
@@ -199,6 +217,10 @@ func (s *Server) handleLoginGET(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLoginPOST(w http.ResponseWriter, r *http.Request) {
+	if !s.loginLimiter.allow(clientIP(r)) {
+		s.render(w, r, "login", viewData{FlashErr: "Too many attempts. Try again in a few minutes."})
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "parse form", http.StatusBadRequest)
 		return

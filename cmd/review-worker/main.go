@@ -88,6 +88,7 @@ func run(cfgPath string) error {
 		Llm:              llm,
 		Clock:            clock,
 		Obs:              obs,
+		Repos:            stores.Repos,
 		CodeChunks:       stores.CodeChunks,
 		Comments:         stores.Comments,
 		Rules:            stores.Rules,

@@ -48,4 +48,7 @@ type ContextStore interface {
 	AppendPrContext(ctx context.Context, item PrContextItem) error
 	ListPrContext(ctx context.Context, ref ports.PrRef) ([]PrContextItem, error)
 	DeletePrContextItem(ctx context.Context, itemId string) error
+	// DeletePrContextBefore removes pr_context_items with created_at <
+	// cutoff. Returns the row count deleted.
+	DeletePrContextBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }

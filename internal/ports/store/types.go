@@ -82,6 +82,7 @@ type PrRun struct {
 	CostUsd    float64
 	StartedAt  time.Time
 	FinishedAt time.Time
+	Error      string
 }
 
 // CostCap is the effective cap for a (tenant, repo) pair.

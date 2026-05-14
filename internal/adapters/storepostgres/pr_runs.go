@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -107,4 +108,76 @@ LIMIT $3
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ListAcrossRepos returns the most recent runs across all repos for a tenant.
+func (s *PrRunStore) ListAcrossRepos(ctx context.Context, tenant ports.TenantId, limit int) ([]store.PrRun, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT run_id::text, tenant_id, repo_id, pr_number, head_sha, trigger,
+       status, COALESCE(model_used,''), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(cost_usd,0),
+       started_at, COALESCE(finished_at, started_at), COALESCE(error,'')
+FROM pr_runs
+WHERE tenant_id = $1
+ORDER BY started_at DESC
+LIMIT $2
+`, string(tenant), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+	var out []store.PrRun
+	for rows.Next() {
+		var r store.PrRun
+		var tenantStr, repo, status, trigger, errStr string
+		if err := rows.Scan(&r.RunId, &tenantStr, &repo, &r.Ref.PrNumber, &r.Ref.HeadSha, &trigger,
+			&status, &r.ModelUsed, &r.TokensIn, &r.TokensOut, &r.CostUsd,
+			&r.StartedAt, &r.FinishedAt, &errStr); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		r.Ref.TenantId = ports.TenantId(tenantStr)
+		r.Ref.RepoId = ports.RepoId(repo)
+		r.Trigger = ports.Trigger(trigger)
+		r.Status = store.RunStatus(status)
+		r.Error = errStr
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetByRunId returns one row by its id.
+func (s *PrRunStore) GetByRunId(ctx context.Context, runId store.RunId) (store.PrRun, bool, error) {
+	var r store.PrRun
+	var tenant, repo, status, trigger, errStr string
+	err := s.pool.QueryRow(ctx, `
+SELECT run_id::text, tenant_id, repo_id, pr_number, head_sha, trigger,
+       status, COALESCE(model_used,''), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(cost_usd,0),
+       started_at, COALESCE(finished_at, started_at), COALESCE(error,'')
+FROM pr_runs WHERE run_id = $1
+`, string(runId)).Scan(&r.RunId, &tenant, &repo, &r.Ref.PrNumber, &r.Ref.HeadSha, &trigger,
+		&status, &r.ModelUsed, &r.TokensIn, &r.TokensOut, &r.CostUsd,
+		&r.StartedAt, &r.FinishedAt, &errStr)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.PrRun{}, false, nil
+	}
+	if err != nil {
+		return store.PrRun{}, false, fmt.Errorf("get run: %w", err)
+	}
+	r.Ref.TenantId = ports.TenantId(tenant)
+	r.Ref.RepoId = ports.RepoId(repo)
+	r.Trigger = ports.Trigger(trigger)
+	r.Status = store.RunStatus(status)
+	r.Error = errStr
+	return r, true, nil
+}
+
+// DeleteBefore removes rows started_at < cutoff.
+func (s *PrRunStore) DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM pr_runs WHERE started_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete pr_runs: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

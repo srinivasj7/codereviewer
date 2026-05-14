@@ -30,6 +30,7 @@ type RepoRef struct {
 	Owner         string
 	Name          string
 	DefaultBranch string
+	Enabled       bool
 }
 
 // Trigger names the reason a pipeline run started. Stored in pr_runs.

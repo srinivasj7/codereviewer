@@ -50,10 +50,10 @@ func (s *RepoStore) Get(ctx context.Context, repoId ports.RepoId) (ports.RepoRef
 	var ref ports.RepoRef
 	var defaultBranch *string
 	err := s.pool.QueryRow(ctx, `
-SELECT tenant_id, owner, name, default_branch
+SELECT tenant_id, owner, name, default_branch, COALESCE(enabled, true)
 FROM repos
 WHERE repo_id = $1
-`, string(repoId)).Scan((*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch)
+`, string(repoId)).Scan((*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ports.RepoRef{}, false, nil
 	}
@@ -70,7 +70,7 @@ WHERE repo_id = $1
 // ListByTenant returns all repos for a tenant.
 func (s *RepoStore) ListByTenant(ctx context.Context, tenant ports.TenantId) ([]ports.RepoRef, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT repo_id, tenant_id, owner, name, default_branch
+SELECT repo_id, tenant_id, owner, name, default_branch, COALESCE(enabled, true)
 FROM repos WHERE tenant_id = $1
 ORDER BY repo_id
 `, string(tenant))
@@ -82,7 +82,7 @@ ORDER BY repo_id
 	for rows.Next() {
 		var ref ports.RepoRef
 		var defaultBranch *string
-		if err := rows.Scan(&ref.RepoId, (*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch); err != nil {
+		if err := rows.Scan(&ref.RepoId, (*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled); err != nil {
 			return nil, fmt.Errorf("scan repo: %w", err)
 		}
 		if defaultBranch != nil {
@@ -91,6 +91,36 @@ ORDER BY repo_id
 		out = append(out, ref)
 	}
 	return out, rows.Err()
+}
+
+// SetEnabled toggles repos.enabled.
+func (s *RepoStore) SetEnabled(ctx context.Context, repoId ports.RepoId, enabled bool) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE repos SET enabled = $2 WHERE repo_id = $1`,
+		string(repoId), enabled)
+	if err != nil {
+		return fmt.Errorf("set enabled: %w", err)
+	}
+	return nil
+}
+
+// Tombstone deletes retrieval data for repoId so subsequent reviews
+// (if the repo is later re-enabled with a fresh index) start clean.
+// review_comments are also cleared so the LLM can't see comments from
+// a deleted-then-rejoined repo.
+func (s *RepoStore) Tombstone(ctx context.Context, repoId ports.RepoId) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM code_chunks WHERE repo_id = $1`, string(repoId)); err != nil {
+		return fmt.Errorf("tombstone code_chunks: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM review_comments WHERE repo_id = $1`, string(repoId)); err != nil {
+		return fmt.Errorf("tombstone review_comments: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func tenantDisplayName(id ports.TenantId) string {

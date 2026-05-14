@@ -130,10 +130,19 @@ The reviewer pulls extra context into each prompt from configurable sources:
 
 All sources merge into the prompt's `[CONTEXT]` section. Under token pressure the order of preservation is: diff → past reviews → related code → context → rules.
 
+## Limits, retention, and operability (slice 4.7)
+
+The system bounds its own growth and surfaces operational state for debugging:
+
+- **Retention** — A janitor goroutine in `admin-ui` sweeps every `[retention].janitor_interval_hours` (default 6). Defaults: keep 365 days of `pr_runs`, 730 days of `feedback_events`, 90 days of `pr_context_items`, top 100k `embedding_cache` rows, last 30 auto-export files. Tune via `[retention]` or the admin Settings page.
+- **Rate limits** — `/login` is capped at 5 attempts per IP per 15 min. `/github/webhook` is capped at 100 req/sec per IP and 1 MiB body. Both honor `X-Forwarded-For` for reverse-proxy deployments.
+- **PII scrubber** — Every `ports.Logger` is wrapped to redact diff hunks, code fences, and oversize strings. Belt-and-suspenders for the no-payload-logging rule.
+- **Recent runs viewer** — `/runs` in the admin UI shows the last 50 pipeline invocations (status, model, cost, error). One-click **retry** re-publishes the `ReviewJob` against the original head sha.
+- **Enable / disable repo** — `/repos` lets you toggle a repo. Disabling tombstones its `code_chunks` and `review_comments`; subsequent webhooks short-circuit silently. Re-enabling means the next default-branch push re-indexes from scratch.
+
 ## Project status
 
-Slices 0–4.6 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI + import/export, per-repo config + issue trackers + ad-hoc context — complete.
+Slices 0–4.7 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI, per-repo config + issue trackers + ad-hoc context, limits + retention + operability — complete.
 
 Remaining slices in [`implementation-plan.md`](./implementation-plan.md):
-- Slice 4.7: limits + retention + operability hardening (janitor, rate limits, PII scrubber, recent-runs viewer)
 - Slice 5: Terraform deploy profile (lean-self-hosted EC2)

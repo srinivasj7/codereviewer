@@ -21,4 +21,11 @@ type RepoStore interface {
 	// Used by the admin UI to enumerate repos for instruction-set
 	// assignment.
 	ListByTenant(ctx context.Context, tenant ports.TenantId) ([]ports.RepoRef, error)
+	// SetEnabled flips repos.enabled. Disabled repos skip the review
+	// pipeline; the gateway still ACKs webhooks so GitHub doesn't retry.
+	SetEnabled(ctx context.Context, repoId ports.RepoId, enabled bool) error
+	// Tombstone clears retrieval data for a disabled repo (code_chunks,
+	// review_comments) per design §15. pr_runs and feedback_events are
+	// kept for audit; the janitor's retention windows apply later.
+	Tombstone(ctx context.Context, repoId ports.RepoId) error
 }

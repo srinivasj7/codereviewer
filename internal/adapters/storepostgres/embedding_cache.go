@@ -44,6 +44,28 @@ WHERE content_hash = ANY($1::text[])
 	return out, rows.Err()
 }
 
+// EvictToMax keeps at most maxRows entries, deleting the oldest by
+// created_at. Approximates LRU under an insert-only access pattern;
+// callers that update last-used semantics would need a column refresh
+// on read, which we trade away to keep the cache hot path cheap.
+func (c *EmbeddingCache) EvictToMax(ctx context.Context, maxRows int) (int64, error) {
+	if maxRows <= 0 {
+		return 0, nil
+	}
+	tag, err := c.pool.Exec(ctx, `
+DELETE FROM embedding_cache
+WHERE content_hash IN (
+  SELECT content_hash FROM embedding_cache
+  ORDER BY created_at ASC
+  OFFSET $1
+)
+`, maxRows)
+	if err != nil {
+		return 0, fmt.Errorf("evict embedding_cache: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // PutMany inserts entries; existing hashes are silently kept (cache
 // values are deterministic for a given hash and model).
 func (c *EmbeddingCache) PutMany(ctx context.Context, entries []store.EmbeddingCacheEntry) error {

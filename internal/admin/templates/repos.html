@@ -1,0 +1,36 @@
+{{define "body"}}
+<section>
+<h1>Repositories</h1>
+<p class="muted">Auto-registered on first webhook. Disabling tombstones the repo's retrieval data and skips all future reviews until re-enabled.</p>
+{{if .Repos}}
+<table>
+<thead><tr><th>Repo</th><th>Owner</th><th>Default branch</th><th>Status</th><th></th></tr></thead>
+<tbody>
+{{range .Repos}}
+<tr>
+  <td><code>{{.RepoId}}</code></td>
+  <td>{{.Owner}}</td>
+  <td>{{.DefaultBranch}}</td>
+  <td>
+    {{if .Enabled}}<span style="color:#0a7">enabled</span>
+    {{else}}<span style="color:#c00">disabled (tombstoned)</span>{{end}}
+  </td>
+  <td>
+    <form method="POST" action="/repos/toggle" class="inline">
+      <input type="hidden" name="repo_id" value="{{.RepoId}}">
+      <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">
+      <button class="btn-secondary" type="submit"
+        onclick="return confirm('{{if .Enabled}}Disabling will tombstone code_chunks and review_comments for this repo. Continue?{{else}}Re-enable {{.RepoId}}?{{end}}')">
+        {{if .Enabled}}disable{{else}}enable{{end}}
+      </button>
+    </form>
+  </td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No repos registered yet.</p>
+{{end}}
+</section>
+{{end}}

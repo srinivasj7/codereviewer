@@ -29,6 +29,11 @@ var OverlayKeys = []string{
 	"observability.sink",
 	"observability.otlp_endpoint",
 	"observability.service_name",
+	"retention.pr_runs_days",
+	"retention.feedback_events_days",
+	"retention.pr_context_items_days",
+	"retention.embedding_cache_max_rows",
+	"retention.auto_export_max_files",
 }
 
 // IsOverlayKey reports whether key is in the runtime-tunable set.
@@ -107,10 +112,29 @@ func applyOne(cfg *schemas.Config, key, value string) error {
 		cfg.Observability.OtlpEndpoint = value
 	case "observability.service_name":
 		cfg.Observability.ServiceName = value
+	case "retention.pr_runs_days":
+		return setIntOverlay(value, &cfg.Retention.PrRunsDays)
+	case "retention.feedback_events_days":
+		return setIntOverlay(value, &cfg.Retention.FeedbackEventsDays)
+	case "retention.pr_context_items_days":
+		return setIntOverlay(value, &cfg.Retention.PrContextItemsDays)
+	case "retention.embedding_cache_max_rows":
+		return setIntOverlay(value, &cfg.Retention.EmbeddingCacheMaxRows)
+	case "retention.auto_export_max_files":
+		return setIntOverlay(value, &cfg.Retention.AutoExportMaxFiles)
 	default:
 		// Listed in OverlayKeys but not handled here — programmer error.
 		return fmt.Errorf("unhandled overlay key")
 	}
+	return nil
+}
+
+func setIntOverlay(value string, dest *int) error {
+	v, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("not an int: %w", err)
+	}
+	*dest = v
 	return nil
 }
 
@@ -143,6 +167,16 @@ func ReadCurrent(cfg *schemas.Config, key string) string {
 		return cfg.Observability.OtlpEndpoint
 	case "observability.service_name":
 		return cfg.Observability.ServiceName
+	case "retention.pr_runs_days":
+		return strconv.Itoa(cfg.Retention.PrRunsDays)
+	case "retention.feedback_events_days":
+		return strconv.Itoa(cfg.Retention.FeedbackEventsDays)
+	case "retention.pr_context_items_days":
+		return strconv.Itoa(cfg.Retention.PrContextItemsDays)
+	case "retention.embedding_cache_max_rows":
+		return strconv.Itoa(cfg.Retention.EmbeddingCacheMaxRows)
+	case "retention.auto_export_max_files":
+		return strconv.Itoa(cfg.Retention.AutoExportMaxFiles)
 	}
 	return ""
 }

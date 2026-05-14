@@ -34,6 +34,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"codereviewer/internal/adapters/obsstdout"
 	"codereviewer/internal/ports"
 )
 
@@ -92,7 +93,7 @@ func New(ctx context.Context, serviceName, otlpEndpoint string) (ports.Obs, func
 	obs := ports.Obs{
 		Tracer: &otelTracer{t: tp.Tracer(serviceName)},
 		Meter:  &otelMeter{m: mp.Meter(serviceName)},
-		Logger: &slogLogger{l: logger},
+		Logger: obsstdout.NewScrubbingLogger(&slogLogger{l: logger}, 0),
 	}
 
 	shutdown := func(ctx context.Context) error {

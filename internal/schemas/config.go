@@ -24,6 +24,33 @@ type Config struct {
 	Tenant        TenantConfig        `toml:"tenant"`
 	Admin         AdminConfig         `toml:"admin"`
 	Context       ContextConfig       `toml:"context"`
+	Retention     RetentionConfig     `toml:"retention"`
+	RateLimit     RateLimitConfig     `toml:"rate_limit"`
+}
+
+// RetentionConfig caps the growth of append-mostly tables and on-disk
+// artifacts. The janitor (admin-ui background goroutine) sweeps on the
+// configured interval. Zero/negative values mean "never delete" for
+// the corresponding table — useful for compliance deploys that prefer
+// archival via DB backups.
+type RetentionConfig struct {
+	PrRunsDays            int  `toml:"pr_runs_days"`             // default 365
+	FeedbackEventsDays    int  `toml:"feedback_events_days"`     // default 730
+	PrContextItemsDays    int  `toml:"pr_context_items_days"`    // default 90
+	EmbeddingCacheMaxRows int  `toml:"embedding_cache_max_rows"` // default 100000
+	AutoExportMaxFiles    int  `toml:"auto_export_max_files"`    // default 30
+	JanitorIntervalHours  int  `toml:"janitor_interval_hours"`   // default 6
+	JanitorEnabled        bool `toml:"janitor_enabled"`
+}
+
+// RateLimitConfig governs the in-memory token-bucket limits on the
+// public-facing endpoints. Per-IP, in-process — multi-replica deploys
+// get multiplied limits, which is fine for the current scale.
+type RateLimitConfig struct {
+	LoginAttempts       int `toml:"login_attempts"`        // default 5
+	LoginWindowMinutes  int `toml:"login_window_minutes"`  // default 15
+	WebhookPerSecond    int `toml:"webhook_per_second"`    // default 100
+	WebhookMaxBodyBytes int `toml:"webhook_max_body_bytes"` // default 1<<20 = 1 MiB
 }
 
 // AdminConfig configures the admin web UI (cmd/admin-ui).
@@ -202,6 +229,36 @@ func (c *Config) Validate() error {
 	}
 	if c.Context.MaxItemsPerPr <= 0 {
 		c.Context.MaxItemsPerPr = 10
+	}
+	if c.Retention.PrRunsDays == 0 {
+		c.Retention.PrRunsDays = 365
+	}
+	if c.Retention.FeedbackEventsDays == 0 {
+		c.Retention.FeedbackEventsDays = 730
+	}
+	if c.Retention.PrContextItemsDays == 0 {
+		c.Retention.PrContextItemsDays = 90
+	}
+	if c.Retention.EmbeddingCacheMaxRows == 0 {
+		c.Retention.EmbeddingCacheMaxRows = 100_000
+	}
+	if c.Retention.AutoExportMaxFiles == 0 {
+		c.Retention.AutoExportMaxFiles = 30
+	}
+	if c.Retention.JanitorIntervalHours <= 0 {
+		c.Retention.JanitorIntervalHours = 6
+	}
+	if c.RateLimit.LoginAttempts <= 0 {
+		c.RateLimit.LoginAttempts = 5
+	}
+	if c.RateLimit.LoginWindowMinutes <= 0 {
+		c.RateLimit.LoginWindowMinutes = 15
+	}
+	if c.RateLimit.WebhookPerSecond <= 0 {
+		c.RateLimit.WebhookPerSecond = 100
+	}
+	if c.RateLimit.WebhookMaxBodyBytes <= 0 {
+		c.RateLimit.WebhookMaxBodyBytes = 1 << 20 // 1 MiB
 	}
 	return nil
 }

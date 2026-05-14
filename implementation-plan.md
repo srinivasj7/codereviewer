@@ -1,6 +1,6 @@
 # Code Review System — Implementation Plan
 
-**Status:** Slice 4 + 4.5 (admin UI) + 4.6 (per-repo config + issue trackers + ad-hoc context) complete; slice 4.7 (limits + retention + ops) next
+**Status:** Slices 4 → 4.7 complete; slice 5 (EC2 deploy) next
 **Last updated:** 2026-05-13
 **Companion to:** [`docs/design.md`](./docs/design.md)
 
@@ -46,7 +46,7 @@ This plan translates the design spec into a concrete, slice-by-slice build. Ever
 | 4. Rules + feedback + observability | **Complete** | rulessourcegit (git CLI clone + `**` glob walk), rulessync pipeline (frontmatter+body parser, cached embeddings, tombstoning), feedback pipeline (reactions + replies; implicit line-changed deferred), gateway routes reactions+replies to the feedback queue, obsotel adapter (OTLP HTTP for traces + metrics; stdout fallback on init failure), OTel collector service + dev.toml flip to `sink="otel"`. New tests: 8 feedback pipeline tests + 7 rulessync parser tests + 3 rulessourcegit glob tests. All packages build + test green. |
 | 4.5. Admin web UI + import/export | **Complete** | New `app_settings` table (migration 006), `SettingsStore` port + Postgres adapter + fake + contract test. Hybrid config overlay: TOML bootstrap, `app_settings` overlays runtime-tunable keys (rules URL, cost caps, tenant info, model choices, observability sink/endpoint). New `cmd/admin-ui` binary on `:8090` with chi router + html/template; password + signed-cookie session auth; GitHub OAuth as a second login path (org-membership check). Dashboard, settings editor, config import/export (TOML), selective DB export/import (code_chunks + rules + review_comments as JSON), scheduled auto-export to a configured directory. Worker boot order now `PickStores → ApplyOverlay → PickObservability` so live setting changes are visible after a restart. New tests: 15 admin handler/session tests + 6 overlay tests + 1 storepostgres settings contract test. |
 | 4.6. Per-repo config + issue trackers + ad-hoc context | **Complete** | New `ContextProvider` port + 5 adapters: `contextrepoinstructions` (DB-assigned named sets + `.codereviewer.md` file override), `contextjira` (REST + email/API token), `contextgithubissues` (reuses GitHub App via `vcsgithub.Source.Client()`), `contextlinear` (GraphQL + API key + optional team-prefix allow-list), `contextadhoc` (reads operator-attached items). Migration 007 adds `instruction_sets`, `repo_instruction_sets`, `pr_context_items`. `VcsSource.FetchPrMeta` added so providers can scan title/branch/body for issue keys. `/context <body>` slash command + admin UI pages for instruction-set CRUD, repo assignment, and per-PR context (text / file upload / URL fetch with allow-list). Prompt assembly grows a new `[CONTEXT]` section with drop-order between `[RELATED CODE]` and `[APPLICABLE RULES]`. New tests: 8 issue-key extractor tests + 4 repo-instructions provider tests + 2 ad-hoc provider tests + 1 URL allow-list test + 2 prompt-assembly Context tests. |
-| 4.7. Limits, retention, operability hardening | Not started | Adds janitor goroutine for retention sweeps (`pr_runs`, `feedback_events`, `pr_context_items` with operator-tunable windows), LRU on `embedding_cache`, rotation on auto-export files, webhook body cap, `/login` and `/github/webhook` rate limits, PII scrubber in the logger layer, recent-`pr_runs` admin viewer + retry button, repo enable/disable from admin UI. |
+| 4.7. Limits, retention, operability hardening | **Complete** | `[retention]` and `[rate_limit]` config blocks with conservative defaults (365/730/90 day windows, 100k cache cap, 5 logins / 15 min, 100 webhooks / sec / IP, 1 MiB body cap). Janitor goroutine in admin-ui sweeps `pr_runs`, `feedback_events`, `pr_context_items`, evicts `embedding_cache` to row count, rotates auto-export files. Webhook gateway gets `middleware.RequestSize` + a token-bucket limiter; admin `/login` gets a fixed-window IP limiter; both honor `X-Forwarded-For`. Logger wrapped with payload-shape scrubber (diff markers, code fences, oversize strings) — defense in depth for the no-payload-logging rule. New admin pages: `/runs` (recent pr_runs across repos + retry button) and `/repos` (enable/disable + tombstone). Review pipeline checks `repos.enabled` before running. New tests: 6 scrubber + 5 rate-limit + 3 janitor + 1 export-rotate. |
 | 5. EC2 deploy profile | Not started | |
 
 ---
@@ -666,6 +666,37 @@ Conventions:
 - **`/context` does not currently respond on the PR.** The slash command writes silently to `pr_context_items` and the next review run picks it up. No "context attached" confirmation comment is posted. Acceptable for slice 4.6; trivial to add when `/context` UX is exercised.
 - **`.codereviewer.md` is hard-coded at the repo root and on the PR's head sha.** No per-directory file, no inheritance from the default branch. If a repo's `.codereviewer.md` is removed in the PR, the assigned set takes back over.
 - **Admin UI doesn't render the instruction-set body as markdown.** Stored as markdown, fed to the LLM as markdown, but the admin form shows raw text. A live preview is deferred.
+
+---
+
+# Slice 4.7 — Limits, retention, operability hardening
+
+**Goal:** the system bounds its own growth and surfaces operational state, so deployments don't degrade silently as PR volume accumulates.
+
+**Adds:**
+- `[retention]` config block with five tunable windows (days for the three append-mostly tables, max rows for `embedding_cache`, max files for auto-export). All five also surface as overlay keys so admins can re-tune from the web UI. Conservative defaults: 365 / 730 / 90 / 100k / 30.
+- `[rate_limit]` config block: per-IP login attempts (5 / 15 min), per-IP webhook RPS (100), webhook body cap (1 MiB).
+- `internal/admin/janitor.go` — background goroutine running every `janitor_interval_hours` (default 6). Each sweep deletes rows older than the configured window in `pr_runs`, `feedback_events`, `pr_context_items`; evicts `embedding_cache` down to the row cap by `created_at`; rotates `config-*` and `data-*` files in `export_dir` keeping the most-recent N per kind. Sweep errors are logged and the loop continues.
+- New store methods: `PrRunStore.{ListAcrossRepos, GetByRunId, DeleteBefore}`, `FeedbackStore.DeleteBefore`, `ContextStore.DeletePrContextBefore`, `EmbeddingCache.EvictToMax`, `RepoStore.{SetEnabled, Tombstone}`. Each gets a Postgres adapter + in-memory fake.
+- Rate-limit middleware: `admin/ratelimit.go` (fixed-window) for `/login`; `webhook-gateway` carries a token-bucket limiter for `/github/webhook`. Both honor `X-Forwarded-For` so a reverse-proxy deployment sees the real source IP.
+- Webhook gateway uses `chi/middleware.RequestSize` to reject bodies above `[rate_limit].webhook_max_body_bytes`.
+- `obsstdout/scrubber.go` wraps every `ports.Logger` with a payload-shape filter: redacts strings containing diff markers (`@@`, `diff --git`), code fences, or three-plus consecutive newlines; truncates plain strings over `maxLen`. Applied to both `obsstdout` and `obsotel` so the guarantee holds across deployments.
+- Admin UI gains two pages: `/runs` (last N pr_runs across all repos, with retry button that re-publishes the `ReviewJob` under `TriggerManual`) and `/repos` (toggle `enabled`; disabling tombstones `code_chunks` + `review_comments` for the repo).
+- Review pipeline: a disabled repo (`repos.enabled = false`) is skipped silently — the bus job is ack'd, no `pr_runs` row, no LLM call, no comment posted.
+
+**Done when:** Letting the docker-compose stack run for 24h with `[retention].janitor_enabled = true` shows old rows being swept on schedule. Posting `/repos/toggle` disables a repo and a subsequent `/review` slash command on that PR exits silently with a log line. Brute-forcing `/login` from one IP gets a 429-like flash after 5 attempts.
+
+## Slice 4.7 deviations from the design
+
+- **Retention enforcement runs in `admin-ui`, not a dedicated `cmd/janitor`.** Trade-off: one fewer process, but the janitor only runs when admin-ui is up. Multi-replica admin-ui deployments will run the janitor N times — the operations are idempotent (DELETE WHERE not-exists is a no-op) so this is safe but slightly noisy. A separate `cmd/janitor` is the natural next move once a deploy needs to scale the admin UI without scaling sweeps.
+- **Rate limits are in-process, per-replica.** Token buckets live in a Go map. Two webhook-gateway replicas means twice the configured RPS in practice. Acceptable at single-node scale (the design's lean-self-hosted profile); a Redis-backed limiter is the right call once horizontal scale lands. The login limiter is on the admin process, which is typically a singleton.
+- **`embedding_cache` eviction is FIFO by `created_at`, not true LRU.** The hot-path put is `INSERT ... ON CONFLICT DO NOTHING`, so we never refresh a row's timestamp on read. True LRU would require either an UPDATE on each Get (cache writes amplify cost) or a separate `last_used_at` column updated periodically. FIFO matches the eviction story Postgres can give us cheaply.
+- **PII scrubber is heuristic, not exhaustive.** Code-shaped values without `@@`, ``` ` ``` ``` ```, or `diff --git` (e.g., a tightly-formatted JSON payload) won't be flagged unless they exceed `maxLen`. The trade-off is favorable: aggressive enough that diffs/code blocks are caught; conservative enough that normal error messages aren't mangled. Operators that need stricter guarantees should set `maxLen` lower (e.g. 80).
+- **Disabling a repo does NOT cancel in-flight reviews.** A `ReviewJob` already in the bus queue (or already begun in a worker) runs to completion; only subsequent jobs check `repos.enabled`. The interval between disable and "last in-flight finishes" is bounded by `Llm.MaxLatency + bus-redelivery`, in practice <120s.
+- **Tombstone clears `code_chunks` + `review_comments` only.** `pr_runs` and `feedback_events` are retained as audit; the janitor's retention windows apply later. If an operator re-enables a repo after a tombstone, the retrieval index starts empty until the next default-branch push triggers a re-index.
+- **Retry button uses `TriggerManual`, not a new trigger value.** Operators wanting to distinguish "human retried" from "manual CLI" would need a new constant. Kept consistent with the design's existing four-trigger taxonomy.
+- **Recent-runs viewer is read-only beyond retry.** No deep-link to the bot's posted comment, no per-run prompt token breakdown, no LLM model used filter. Slice 4.7 surface is the minimum that answers "why didn't my review post"; richer drill-down is a slice 5+ ergonomic improvement.
+- **The webhook gateway's RPS limiter ignores the body size before applying.** A bad actor that sends 1 MiB bodies up to the per-second limit still consumes substantial bandwidth. The `RequestSize` middleware caps per-request; the RPS cap caps per-second. Both apply, but they don't compose into a per-second-byte budget.
 
 ---
 

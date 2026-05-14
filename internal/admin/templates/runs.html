@@ -1,0 +1,37 @@
+{{define "body"}}
+<section>
+<h1>Recent runs</h1>
+<p class="muted">Last {{len .Runs}} pipeline invocations across all repos for tenant <code>{{.TenantId}}</code>. Use the retry button to re-enqueue a review against the same head sha.</p>
+{{if .Runs}}
+<table>
+<thead><tr><th>When</th><th>Repo / PR</th><th>Trigger</th><th>Status</th><th>Model</th><th>Cost</th><th>Error</th><th></th></tr></thead>
+<tbody>
+{{range .Runs}}
+<tr>
+  <td><span class="muted">{{.StartedAt}}</span></td>
+  <td><code>{{.RepoId}}#{{.PrNumber}}</code><br><span class="muted">{{.ShortSha}}</span></td>
+  <td><code>{{.Trigger}}</code></td>
+  <td>
+    {{if eq .Status "posted"}}<span style="color:#0a7">{{.Status}}</span>
+    {{else if eq .Status "budget-exceeded"}}<span style="color:#c80">{{.Status}}</span>
+    {{else if eq .Status "failed-open"}}<span style="color:#c00">{{.Status}}</span>
+    {{else}}{{.Status}}{{end}}
+  </td>
+  <td><span class="muted">{{.ModelUsed}}</span></td>
+  <td>${{.CostUsd}}</td>
+  <td><pre style="white-space: pre-wrap; margin: 0; max-height: 4rem; overflow-y: auto;">{{.Error}}</pre></td>
+  <td>
+    <form method="POST" action="/runs/retry" class="inline">
+      <input type="hidden" name="run_id" value="{{.RunId}}">
+      <button class="btn-secondary" type="submit">retry</button>
+    </form>
+  </td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No runs yet.</p>
+{{end}}
+</section>
+{{end}}

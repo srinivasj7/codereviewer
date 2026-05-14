@@ -68,6 +68,7 @@ type Deps struct {
 	Llm              ports.LlmGateway
 	Clock            ports.Clock
 	Obs              ports.Obs
+	Repos            store.RepoStore
 	CodeChunks       store.CodeChunkStore
 	Comments         store.CommentStore
 	Rules            store.RuleStore
@@ -117,6 +118,17 @@ func (p *Pipeline) Handle(ctx context.Context, payload []byte, cctx ports.Consum
 func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	ref := job.PrRef
 	sw := newStopwatch(p.deps.Clock)
+
+	// Disabled repos are silently skipped. Webhook traffic still acks
+	// (the gateway doesn't know the repo is disabled until this point);
+	// the job consumes one delivery and exits.
+	if p.deps.Repos != nil {
+		if repo, found, err := p.deps.Repos.Get(ctx, ref.RepoId); err == nil && found && !repo.Enabled {
+			p.deps.Obs.Logger.Info("repo disabled; skipping review",
+				"repo_id", string(ref.RepoId), "pr_number", ref.PrNumber)
+			return nil
+		}
+	}
 
 	runId, dup, err := p.deps.PrRuns.Begin(ctx, store.BeginRun{
 		Ref:            ref,

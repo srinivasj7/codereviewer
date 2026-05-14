@@ -60,6 +60,11 @@ func run(cfgPath string) error {
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
+	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
+	if err != nil {
+		return fmt.Errorf("bus: %w", err)
+	}
+
 	password, err := secrets.Get(ctx, "ADMIN_PASSWORD")
 	if err != nil || password == "" {
 		// Fall back to TOML (`admin.password`); useful for dev where
@@ -79,6 +84,7 @@ func run(cfgPath string) error {
 		PrRuns:   stores.PrRuns,
 		Repos:    stores.Repos,
 		Context:  stores.Context,
+		Bus:      bus,
 		Pool:     stores.RawHandle,
 		Obs:      obs,
 	}, password, sessionSecret, false /* secure cookie: production sets via reverse proxy */)
@@ -98,6 +104,24 @@ func run(cfgPath string) error {
 		exporter := admin.NewAutoExporter(srv, cfg.Admin.ExportDir,
 			time.Duration(cfg.Admin.AutoExportHours)*time.Hour)
 		go exporter.Run(ctx)
+	}
+
+	if cfg.Retention.JanitorEnabled {
+		j := &admin.Janitor{
+			PrRuns:         stores.PrRuns,
+			Feedback:       stores.Feedback,
+			Context:        stores.Context,
+			EmbeddingCache: stores.EmbeddingCache,
+			ExportDir:      cfg.Admin.ExportDir,
+			PrRunsDays:     cfg.Retention.PrRunsDays,
+			FeedbackDays:   cfg.Retention.FeedbackEventsDays,
+			PrContextDays:  cfg.Retention.PrContextItemsDays,
+			CacheMaxRows:   cfg.Retention.EmbeddingCacheMaxRows,
+			ExportMaxFiles: cfg.Retention.AutoExportMaxFiles,
+			Interval:       time.Duration(cfg.Retention.JanitorIntervalHours) * time.Hour,
+			Obs:            obs.Logger,
+		}
+		go j.Run(ctx)
 	}
 
 	go func() {

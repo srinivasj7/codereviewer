@@ -86,3 +86,21 @@ enabled = true
 [context.linear]
 api_key      = "${LINEAR_API_KEY}"
 team_prefixes = []
+
+# Retention windows enforced by the janitor goroutine in admin-ui.
+# Zero/negative on a *_days field means "never delete" for that table.
+[retention]
+janitor_enabled           = true
+janitor_interval_hours    = 6
+pr_runs_days              = 365
+feedback_events_days      = 730
+pr_context_items_days     = 90
+embedding_cache_max_rows  = 100000
+auto_export_max_files     = 30
+
+# Per-IP rate limits + body cap on the webhook gateway and admin login.
+[rate_limit]
+login_attempts          = 5
+login_window_minutes    = 15
+webhook_per_second      = 100
+webhook_max_body_bytes  = 1048576
