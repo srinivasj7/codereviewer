@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1.7
+#
+# Production multi-stage build for code-review system binaries.
+# Target selects the runtime base; CMD selects which cmd/<x> to compile.
+#
+#   --target final-static  -> distroless/static-debian12  (webhook-gateway,
+#       review-worker, feedback-worker, admin-ui, backfill-cli, migrate)
+#   --target final-cc      -> distroless/cc-debian12      (indexer-worker;
+#       tree-sitter needs CGO + libstdc++)
+#   --target final-git     -> debian:stable-slim + git    (rules-sync;
+#       shells out to the git CLI to clone the rules repo)
+#
+# Build a single image:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     --target final-static --build-arg CMD=review-worker \
+#     -t ghcr.io/<owner>/codereviewer-review-worker:<tag> \
+#     -f docker/Dockerfile.prod .
+
+ARG GO_VERSION=1.25
+
+# ---- Static builder (CGO off) ----
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS builder-static
+ARG CMD
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-w -s" -o /out/binary ./cmd/${CMD}
+
+# ---- CGO builder (tree-sitter) ----
+# QEMU handles cross-arch builds at the platform layer above; we keep the
+# C toolchain native to the running stage so cgo links cleanly.
+FROM golang:${GO_VERSION}-bookworm AS builder-cgo
+ARG CMD
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config && rm -rf /var/lib/apt/lists/*
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=1 GOOS=linux \
+    go build -trimpath -ldflags="-w -s" -o /out/binary ./cmd/${CMD}
+
+# ---- Final: static binaries on distroless/static ----
+FROM gcr.io/distroless/static-debian12:nonroot AS final-static
+WORKDIR /app
+COPY --from=builder-static /out/binary /app/binary
+USER nonroot:nonroot
+ENTRYPOINT ["/app/binary"]
+
+# ---- Final: CGO binary (indexer-worker) on distroless/cc ----
+FROM gcr.io/distroless/cc-debian12:nonroot AS final-cc
+WORKDIR /app
+COPY --from=builder-cgo /out/binary /app/binary
+USER nonroot:nonroot
+ENTRYPOINT ["/app/binary"]
+
+# ---- Final: rules-sync needs git on PATH ----
+FROM debian:stable-slim AS final-git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -u 10001 -m -s /usr/sbin/nologin app
+USER app:app
+WORKDIR /app
+COPY --from=builder-static /out/binary /app/binary
+ENTRYPOINT ["/app/binary"]

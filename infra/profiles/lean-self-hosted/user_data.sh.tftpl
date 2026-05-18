@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# cloud-init for the lean-self-hosted EC2 profile.
+#
+# Installs Docker, fetches the production docker-compose stack, and
+# leaves /opt/codereviewer ready for the operator to drop secrets
+# (.env, github-app-key.pem) into via SSM Session Manager before
+# starting the systemd unit.
+
+set -euo pipefail
+exec > >(tee -a /var/log/codereviewer-bootstrap.log) 2>&1
+
+dnf -y update
+dnf -y install docker git
+systemctl enable --now docker
+
+# Docker Compose v2 plugin: AL2023 ships it under
+# /usr/libexec/docker/cli-plugins on recent AMIs, but pin it ourselves
+# so version drift doesn't break the unit.
+mkdir -p /usr/local/lib/docker/cli-plugins
+arch=$(uname -m)
+case "$arch" in
+  x86_64)   compose_arch=x86_64 ;;
+  aarch64)  compose_arch=aarch64 ;;
+  *) echo "unsupported arch $arch"; exit 1 ;;
+esac
+curl -fsSL \
+  "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$${compose_arch}" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+install -d -m 0755 -o root -g root /opt/codereviewer
+install -d -m 0750 -o root -g root /opt/codereviewer/secrets
+install -d -m 0755 -o root -g root /opt/codereviewer/exports
+
+cat >/opt/codereviewer/.image-tag <<EOF
+IMAGE_OWNER=${image_owner}
+IMAGE_TAG=${image_tag}
+EOF
+
+cat >/opt/codereviewer/docker-compose.yml <<'COMPOSE'
+name: codereviewer
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: codereviewer
+    secrets: [postgres_password]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d codereviewer"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  migrate:
+    image: ${image_owner}-migrate:${image_tag}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: [/opt/codereviewer/.env]
+    restart: "no"
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+
+  webhook-gateway:
+    image: ${image_owner}-webhook-gateway:${image_tag}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    ports: ["443:8080"]  # front with Caddy/nginx for TLS in production
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+      - /opt/codereviewer/secrets/github-app-key.pem:/run/secrets/github-app-key.pem:ro
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    restart: unless-stopped
+
+  review-worker:
+    image: ${image_owner}-review-worker:${image_tag}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+      - /opt/codereviewer/secrets/github-app-key.pem:/run/secrets/github-app-key.pem:ro
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    restart: unless-stopped
+
+  indexer-worker:
+    image: ${image_owner}-indexer-worker:${image_tag}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+      - /opt/codereviewer/secrets/github-app-key.pem:/run/secrets/github-app-key.pem:ro
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    restart: unless-stopped
+
+  feedback-worker:
+    image: ${image_owner}-feedback-worker:${image_tag}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    restart: unless-stopped
+
+  admin-ui:
+    image: ${image_owner}-admin-ui:${image_tag}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports: ["127.0.0.1:8090:8090"]  # not exposed; reach via SSM port-forward
+    env_file: [/opt/codereviewer/.env]
+    volumes:
+      - /opt/codereviewer/config.toml:/etc/codereviewer/config.toml:ro
+      - admin_exports:/var/lib/codereviewer/exports
+    command: ["--config", "/etc/codereviewer/config.toml"]
+    restart: unless-stopped
+
+secrets:
+  postgres_password:
+    file: /opt/codereviewer/secrets/postgres_password
+
+volumes:
+  pg_data:
+  admin_exports:
+COMPOSE
+
+cat >/etc/systemd/system/codereviewer.service <<'UNIT'
+[Unit]
+Description=codereviewer compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/codereviewer
+EnvironmentFile=/opt/codereviewer/.image-tag
+ExecStartPre=/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable codereviewer.service
+
+cat <<'NEXT' >/opt/codereviewer/NEXT_STEPS.txt
+Next steps to finish bootstrap (run via SSM Session Manager):
+
+  1. Drop /opt/codereviewer/.env with real secrets (GITHUB_WEBHOOK_SECRET,
+     ADMIN_PASSWORD, OPENAI_API_KEY or ANTHROPIC_API_KEY, ...).
+  2. Drop /opt/codereviewer/secrets/postgres_password (chmod 600).
+  3. Drop /opt/codereviewer/secrets/github-app-key.pem (chmod 600).
+  4. Drop /opt/codereviewer/config.toml (start from docker/dev.toml in
+     the repo; flip [observability].insecure to false once TLS is set up).
+  5. Drop /opt/codereviewer/litellm-config.yaml (model routing config).
+  6. systemctl start codereviewer
+NEXT

@@ -1,0 +1,32 @@
+[Unit]
+Description=codereviewer webhook gateway
+After=network-online.target postgresql.service nats-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codereviewer
+Group=codereviewer
+EnvironmentFile=/etc/codereviewer/env
+ExecStart=/usr/local/bin/codereviewer-webhook-gateway --config=/etc/codereviewer/config.toml
+Restart=on-failure
+RestartSec=5s
+
+# Sandboxing: no payload logging is a project invariant; the scrubber
+# enforces this at the logger boundary. Tighten the systemd surface as
+# defense-in-depth so a compromised process can't quietly read /home,
+# /etc, or /var that doesn't belong to it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/codereviewer
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

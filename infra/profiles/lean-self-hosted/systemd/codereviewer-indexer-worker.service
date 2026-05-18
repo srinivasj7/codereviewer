@@ -1,0 +1,28 @@
+[Unit]
+Description=codereviewer indexer worker
+After=network-online.target postgresql.service nats-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codereviewer
+Group=codereviewer
+EnvironmentFile=/etc/codereviewer/env
+ExecStart=/usr/local/bin/codereviewer-indexer-worker --config=/etc/codereviewer/config.toml
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/codereviewer
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

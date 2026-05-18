@@ -1,0 +1,29 @@
+[Unit]
+Description=codereviewer admin UI
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codereviewer
+Group=codereviewer
+EnvironmentFile=/etc/codereviewer/env
+ExecStart=/usr/local/bin/codereviewer-admin-ui --config=/etc/codereviewer/config.toml
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+# admin-ui owns the export volume + the rules clone dir.
+ReadWritePaths=/var/lib/codereviewer /var/lib/codereviewer/exports
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

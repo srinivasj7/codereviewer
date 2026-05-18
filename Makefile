@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration verify verify-keep verify-no-stack typecheck lint tidy generate migrate-up dev-review dev-gateway clean help
+.PHONY: build test test-race test-integration verify verify-keep verify-no-stack typecheck lint tidy generate migrate-up dev-review dev-gateway docker-build-prod clean help
 
 GO ?= go
 
@@ -18,6 +18,7 @@ help:
 	@echo "  migrate-up    - Apply DB migrations via goose (slice 1+)"
 	@echo "  dev-review    - Run review-worker with dev.toml"
 	@echo "  dev-gateway   - Run webhook-gateway with dev.toml"
+	@echo "  docker-build-prod - Build production distroless images for the local arch"
 	@echo "  clean         - Remove build artifacts"
 
 build:
@@ -73,6 +74,31 @@ dev-review:
 
 dev-gateway:
 	$(GO) run ./cmd/webhook-gateway --config=dev.toml
+
+# Build distroless production images for the local arch. CI builds the
+# multi-arch versions via the release workflow.
+IMAGE_PREFIX ?= codereviewer
+IMAGE_TAG    ?= dev
+STATIC_CMDS  := webhook-gateway review-worker feedback-worker admin-ui backfill-cli migrate
+docker-build-prod:
+	@command -v docker >/dev/null 2>&1 || { echo "docker required"; exit 1; }
+	@for cmd in $(STATIC_CMDS); do \
+	  echo "==> building $$cmd (final-static)"; \
+	  docker build --target final-static \
+	    --build-arg CMD=$$cmd \
+	    -t $(IMAGE_PREFIX)-$$cmd:$(IMAGE_TAG) \
+	    -f docker/Dockerfile.prod . || exit 1; \
+	done
+	@echo "==> building indexer-worker (final-cc)"
+	docker build --target final-cc \
+	  --build-arg CMD=indexer-worker \
+	  -t $(IMAGE_PREFIX)-indexer-worker:$(IMAGE_TAG) \
+	  -f docker/Dockerfile.prod .
+	@echo "==> building rules-sync (final-git)"
+	docker build --target final-git \
+	  --build-arg CMD=rules-sync \
+	  -t $(IMAGE_PREFIX)-rules-sync:$(IMAGE_TAG) \
+	  -f docker/Dockerfile.prod .
 
 clean:
 	rm -rf bin/ dist/ coverage.out coverage.html

@@ -154,9 +154,35 @@ The system bounds its own growth and surfaces operational state for debugging:
 - **Recent runs viewer** — `/runs` in the admin UI shows the last 50 pipeline invocations (status, model, cost, error). One-click **retry** re-publishes the `ReviewJob` against the original head sha.
 - **Enable / disable repo** — `/repos` lets you toggle a repo. Disabling tombstones its `code_chunks` and `review_comments`; subsequent webhooks short-circuit silently. Re-enabling means the next default-branch push re-indexes from scratch.
 
+## Production deploy (slice 5)
+
+### Container images
+
+```sh
+make docker-build-prod                  # local-arch distroless images
+docker images | grep codereviewer-
+```
+
+CI tags (`v*`) trigger `.github/workflows/release.yml`, which builds multi-arch (amd64 + arm64/Graviton) distroless images for every binary and pushes them to GHCR as `ghcr.io/<owner>/codereviewer-<binary>:<tag>`.
+
+### Lean self-hosted (single EC2)
+
+```sh
+cd infra/profiles/lean-self-hosted
+cat > terraform.tfvars <<EOF
+region      = "us-east-1"
+image_owner = "ghcr.io/your-org/codereviewer"
+image_tag   = "v0.5.0"
+EOF
+terraform init && terraform apply
+```
+
+The user-data script installs Docker, writes a production compose file, and registers a `codereviewer.service` systemd unit. Finish bootstrap by dropping `.env`, `config.toml`, the GitHub App private key, and the Postgres password into `/opt/codereviewer/` via SSM Session Manager — exact paths in `/opt/codereviewer/NEXT_STEPS.txt`.
+
+If you'd rather skip Docker entirely, `infra/profiles/lean-self-hosted/systemd/` ships per-binary unit files that run the Go binaries directly against host Postgres + NATS.
+
+See [`infra/profiles/lean-self-hosted/README.md`](./infra/profiles/lean-self-hosted/README.md) for details.
+
 ## Project status
 
-Slices 0–4.7 — skeleton, infrastructure, naive review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI, per-repo config + issue trackers + ad-hoc context, limits + retention + operability — complete.
-
-Remaining slices in [`implementation-plan.md`](./implementation-plan.md):
-- Slice 5: Terraform deploy profile (lean-self-hosted EC2)
+Slices 0–5 complete — skeleton, infrastructure, review pipeline, retrieval + backfill, rules + feedback + observability, admin web UI, per-repo + issue trackers + ad-hoc context, limits + retention + operability, EC2 deploy profile.

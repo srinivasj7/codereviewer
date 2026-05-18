@@ -1,0 +1,15 @@
+[Unit]
+Description=All codereviewer services
+Requires=codereviewer-webhook-gateway.service \
+         codereviewer-review-worker.service \
+         codereviewer-indexer-worker.service \
+         codereviewer-feedback-worker.service \
+         codereviewer-admin-ui.service
+After=codereviewer-webhook-gateway.service \
+      codereviewer-review-worker.service \
+      codereviewer-indexer-worker.service \
+      codereviewer-feedback-worker.service \
+      codereviewer-admin-ui.service
+
+[Install]
+WantedBy=multi-user.target
