@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -237,9 +238,18 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("parse llm output: %w", err))
 	}
 
+	validLines := validRightLines(diff.Content)
 	botComments := make([]ports.BotComment, 0, len(raw))
 	hasBlocker := false
+	dropped := 0
 	for _, c := range raw {
+		if !commentLinesValid(validLines, c.File, c.StartLine, c.EndLine) {
+			dropped++
+			p.deps.Obs.Logger.Warn("dropping inline comment with unresolvable line",
+				"file", c.File, "start_line", c.StartLine, "end_line", c.EndLine,
+				"pr_number", ref.PrNumber)
+			continue
+		}
 		botComments = append(botComments, ports.BotComment{
 			File:      c.File,
 			StartLine: c.StartLine,
@@ -320,6 +330,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		"pr_number", ref.PrNumber,
 		"head_sha", ref.HeadSha,
 		"comments_posted", len(botComments),
+		"comments_dropped_invalid_line", dropped,
 		"tokens_in", resp.TokensIn,
 		"tokens_out", resp.TokensOut,
 		"cost_usd", resp.CostUsd,
@@ -332,6 +343,88 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	}, sw.Kv()...)
 	p.deps.Obs.Logger.Info("review completed", logKv...)
 	return finishErr
+}
+
+// validRightLines parses a unified diff and returns, for each file in
+// the post-image, the set of line numbers on the RIGHT side that an
+// inline review comment may legally anchor to (added or context lines
+// within a hunk). The LLM occasionally cites lines outside any hunk
+// — GitHub returns 422 for the whole batch when that happens.
+func validRightLines(diff string) map[string]map[int]bool {
+	out := make(map[string]map[int]bool)
+	var path string
+	var line int
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "+++ "):
+			p := strings.TrimSpace(strings.TrimPrefix(l, "+++ "))
+			if p == "/dev/null" {
+				path = ""
+				continue
+			}
+			p = strings.TrimPrefix(p, "b/")
+			path = p
+			if path != "" {
+				out[path] = make(map[int]bool)
+			}
+		case strings.HasPrefix(l, "@@"):
+			start, ok := parseHunkRightStart(l)
+			if !ok {
+				continue
+			}
+			line = start
+		case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
+			if path != "" {
+				out[path][line] = true
+			}
+			line++
+		case strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---"):
+			// deleted line — does not advance the right-side cursor.
+		case strings.HasPrefix(l, " "):
+			if path != "" {
+				out[path][line] = true
+			}
+			line++
+		}
+	}
+	return out
+}
+
+// parseHunkRightStart pulls the new-file starting line out of a hunk
+// header like "@@ -10,5 +20,7 @@ context". Returns 20, true for that
+// example.
+func parseHunkRightStart(hdr string) (int, bool) {
+	plus := strings.Index(hdr, "+")
+	if plus < 0 {
+		return 0, false
+	}
+	rest := hdr[plus+1:]
+	end := strings.IndexAny(rest, ", ")
+	if end < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// commentLinesValid reports whether the (file, start..end) span the
+// LLM emitted is reachable by an inline comment on the post-image.
+// A zero StartLine means single-line at EndLine.
+func commentLinesValid(valid map[string]map[int]bool, file string, start, end int) bool {
+	lines := valid[file]
+	if lines == nil {
+		return false
+	}
+	if end <= 0 || !lines[end] {
+		return false
+	}
+	if start > 0 && start != end && !lines[start] {
+		return false
+	}
+	return true
 }
 
 // extractChangedFiles parses the unified-diff "+++ b/<path>" headers
