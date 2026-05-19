@@ -238,7 +238,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	}
 
 	botComments := make([]ports.BotComment, 0, len(raw))
-	hasHighSeverity := false
+	hasBlocker := false
 	for _, c := range raw {
 		botComments = append(botComments, ports.BotComment{
 			File:      c.File,
@@ -248,13 +248,13 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 			Category:  c.Category,
 			Severity:  c.Severity,
 		})
-		if c.Category == "bug" || c.Category == "security" {
-			hasHighSeverity = true
+		if c.Category == "bug" || c.Category == "security" || c.Severity == "high" {
+			hasBlocker = true
 		}
 	}
 
 	review := ports.ReviewPayload{
-		Body:     summaryBody(len(botComments), hasHighSeverity),
+		Body:     summaryBody(len(botComments), hasBlocker),
 		Comments: botComments,
 	}
 	posted, err := p.deps.Vcs.PostReview(ctx, ref, review)
@@ -263,8 +263,33 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("post review: %w", err))
 	}
 
+	// Persist bot comments so the feedback worker can attach reactions/replies
+	// by GithubId, and so retrieval can surface them on future PRs. Failures
+	// here are non-fatal: the GitHub-side review is already up.
+	for i, c := range botComments {
+		var githubId *int64
+		if i < len(posted.CommentIds) {
+			id := posted.CommentIds[i]
+			githubId = &id
+		}
+		if _, err := p.deps.Comments.Upsert(ctx, store.CommentUpsert{
+			TenantId:    ref.TenantId,
+			RepoId:      ref.RepoId,
+			PrNumber:    ref.PrNumber,
+			Source:      "bot",
+			GithubId:    githubId,
+			FilePath:    c.File,
+			StartLine:   c.StartLine,
+			EndLine:     c.EndLine,
+			CommentText: c.Body,
+			Category:    c.Category,
+		}); err != nil {
+			p.deps.Obs.Logger.Warn("persist bot comment failed", "err", err.Error())
+		}
+	}
+
 	conclusion := "success"
-	if hasHighSeverity {
+	if hasBlocker {
 		conclusion = "failure"
 	}
 	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
@@ -391,12 +416,12 @@ func (p *Pipeline) failOpen(ctx context.Context, ref ports.PrRef, runId store.Ru
 	return cause
 }
 
-func summaryBody(n int, hasHighSeverity bool) string {
+func summaryBody(n int, hasBlocker bool) string {
 	if n == 0 {
 		return "Reviewed; no comments."
 	}
-	if hasHighSeverity {
-		return fmt.Sprintf("Reviewed; %d comments (bug/security flagged).", n)
+	if hasBlocker {
+		return fmt.Sprintf("Reviewed; %d comments (bug/security or high-severity flagged).", n)
 	}
 	return fmt.Sprintf("Reviewed; %d comments.", n)
 }

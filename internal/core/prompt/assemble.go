@@ -16,10 +16,31 @@ Output ONLY a JSON array of comment objects with this exact shape:
     "category": "bug|security|style|suggestion|question",
     "severity": "high|medium|low"}]
 
+How to choose category and severity:
+- Use category=bug when the code will misbehave at runtime: wrong
+  output, thrown exception, off-by-one, data corruption, unconditional
+  side effects inside a conditional branch, broken contract with a
+  caller. These are defects, not preferences.
+- Use category=security for any input-trust or authz/authn weakness:
+  SQL/HTML/shell injection, missing authorization check, secret in
+  source, unsafe deserialization, prototype pollution, SSRF.
+- Use category=style only for purely aesthetic preferences with no
+  behavioral impact (formatting, naming, ordering).
+- Use category=suggestion for refactors that improve clarity or
+  reduce future risk but don't fix a present defect.
+- Use category=question when you're genuinely uncertain whether
+  something is wrong.
+- Set severity=high when the defect is reachable in production
+  without an unusual input. Set severity=medium for edge cases or
+  recoverable misbehavior. Set severity=low for cosmetic or minor
+  maintainability concerns.
+
 Rules for output:
 - Cite exact line numbers from the diff. Never invent lines.
 - Skip nits the team has previously dismissed (severity=low + dismissed pattern).
-- Prefer questions over assertions when uncertain.
+- Prefer questions over assertions when uncertain — but if the
+  defect is concrete (e.g., math is wrong, branch is unreachable),
+  call it category=bug, not question.
 - Limit total comments to 8 per PR; pick the highest-severity findings.`
 
 // DefaultClosingInstruction terminates the user-turn prompt.
