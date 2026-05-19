@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/adapters/rulessourcegit"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
@@ -70,7 +71,7 @@ func run(cfgPath, tenantOverride, pattern string) error {
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
-	llm, err := boot.PickLlm(cfg.Llm, secrets, obs)
+	llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{})
 	if err != nil {
 		return fmt.Errorf("llm: %w", err)
 	}

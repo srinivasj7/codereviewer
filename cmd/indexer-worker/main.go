@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/core/pipelines/indexer"
@@ -74,7 +75,11 @@ func run(cfgPath string) error {
 		return fmt.Errorf("vcs: %w", err)
 	}
 
-	llm, err := boot.PickLlm(cfg.Llm, secrets, obs)
+	llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{
+		Primary:    func() string { return reloader.Current().Llm.PrimaryModelURL },
+		Fallback:   func() string { return reloader.Current().Llm.FallbackModelURL },
+		Embeddings: func() string { return reloader.Current().Llm.EmbeddingsURL },
+	})
 	if err != nil {
 		return fmt.Errorf("llm: %w", err)
 	}

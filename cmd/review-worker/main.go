@@ -17,6 +17,7 @@ import (
 	"codereviewer/internal/adapters/contextjira"
 	"codereviewer/internal/adapters/contextlinear"
 	"codereviewer/internal/adapters/contextrepoinstructions"
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/adapters/vcsgithub"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
@@ -83,7 +84,11 @@ func run(cfgPath string) error {
 		return fmt.Errorf("vcs: %w", err)
 	}
 
-	llm, err := boot.PickLlm(cfg.Llm, secrets, obs)
+	llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{
+		Primary:    func() string { return reloader.Current().Llm.PrimaryModelURL },
+		Fallback:   func() string { return reloader.Current().Llm.FallbackModelURL },
+		Embeddings: func() string { return reloader.Current().Llm.EmbeddingsURL },
+	})
 	if err != nil {
 		return fmt.Errorf("llm: %w", err)
 	}

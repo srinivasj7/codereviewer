@@ -21,41 +21,68 @@ import (
 	"codereviewer/internal/schemas"
 )
 
+// ModelURLs supplies the three model names indirectly so the worker
+// can hot-reload them from the settings overlay without rebuilding
+// the openai client. nil fields fall back to the values in the cfg
+// struct passed to New (useful for one-shot CLIs that have no
+// reloader running).
+type ModelURLs struct {
+	Primary    func() string
+	Fallback   func() string
+	Embeddings func() string
+}
+
 // Gateway is the LlmGateway adapter.
 type Gateway struct {
-	client          *openai.Client
-	primaryModel    string
-	fallbackModel   string
-	embeddingsModel string
-	chatTimeout     time.Duration
-	embedTimeout    time.Duration
+	client         *openai.Client
+	primaryModel   func() string
+	fallbackModel  func() string
+	embeddingsName func() string
+	chatTimeout    time.Duration
+	embedTimeout   time.Duration
 
 	encMu    sync.Mutex
 	encoders map[string]*tiktoken.Tiktoken
 }
 
-// New constructs a Gateway pointed at the LiteLLM URL in cfg.
-func New(cfg schemas.LlmConfig) (*Gateway, error) {
+// New constructs a Gateway pointed at the LiteLLM URL in cfg. Model
+// names default to cfg.{Primary,Fallback,Embeddings}URL; pass a
+// non-nil closure on the matching ModelURLs field to have them
+// re-read on each call (hot reload).
+func New(cfg schemas.LlmConfig, models ModelURLs) (*Gateway, error) {
 	if cfg.GatewayURL == "" {
 		return nil, fmt.Errorf("llm.gateway_url is required for litellm")
 	}
 	if cfg.PrimaryModelURL == "" {
 		return nil, fmt.Errorf("llm.primary_model_url (model name) is required")
 	}
+	if models.Primary == nil {
+		v := cfg.PrimaryModelURL
+		models.Primary = func() string { return v }
+	}
+	if models.Fallback == nil {
+		v := cfg.FallbackModelURL
+		models.Fallback = func() string { return v }
+	}
+	if models.Embeddings == nil {
+		v := cfg.EmbeddingsURL
+		models.Embeddings = func() string { return v }
+	}
 	clientCfg := openai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = strings.TrimRight(cfg.GatewayURL, "/") + "/v1"
 	g := &Gateway{
-		client:          openai.NewClientWithConfig(clientCfg),
-		primaryModel:    cfg.PrimaryModelURL,
-		fallbackModel:   cfg.FallbackModelURL,
-		embeddingsModel: cfg.EmbeddingsURL,
-		chatTimeout:     time.Duration(cfg.ChatTimeoutSec) * time.Second,
-		embedTimeout:    time.Duration(cfg.EmbedTimeoutSec) * time.Second,
-		encoders:        make(map[string]*tiktoken.Tiktoken),
+		client:         openai.NewClientWithConfig(clientCfg),
+		primaryModel:   models.Primary,
+		fallbackModel:  models.Fallback,
+		embeddingsName: models.Embeddings,
+		chatTimeout:    time.Duration(cfg.ChatTimeoutSec) * time.Second,
+		embedTimeout:   time.Duration(cfg.EmbedTimeoutSec) * time.Second,
+		encoders:       make(map[string]*tiktoken.Tiktoken),
 	}
-	// Warm the tokenizer for the primary model so the first review call
-	// doesn't pay the BPE-load latency. Best effort; fallback is len/4.
-	if name := encodingForModel(g.primaryModel); name != "" {
+	// Warm the tokenizer for the (boot-time) primary model. If the model
+	// is later hot-swapped to a different family we'll lazy-load the new
+	// tokenizer on first use.
+	if name := encodingForModel(g.primaryModel()); name != "" {
 		_, _ = g.encoderFor(name)
 	}
 	return g, nil
@@ -104,7 +131,7 @@ func (g *Gateway) Chat(ctx context.Context, req ports.ChatRequest) (ports.ChatRe
 // Embed batches texts into one OpenAI embeddings call. opts.Model
 // overrides the default embeddings model from config.
 func (g *Gateway) Embed(ctx context.Context, texts []string, opts ports.EmbedOpts) ([]ports.EmbeddingResult, error) {
-	model := g.embeddingsModel
+	model := g.embeddingsName()
 	if opts.Model != "" {
 		model = opts.Model
 	}
@@ -144,7 +171,7 @@ func (g *Gateway) Embed(ctx context.Context, texts []string, opts ports.EmbedOpt
 // later enhancement.
 func (g *Gateway) EstimateTokens(text, model string) int {
 	if model == "" {
-		model = g.primaryModel
+		model = g.primaryModel()
 	}
 	name := encodingForModel(model)
 	if name == "" {
@@ -192,12 +219,12 @@ func encodingForModel(model string) string {
 
 func (g *Gateway) modelForTier(tier ports.LlmTier) string {
 	if tier == ports.LlmTierFallback {
-		if g.fallbackModel != "" {
-			return g.fallbackModel
+		if v := g.fallbackModel(); v != "" {
+			return v
 		}
-		return g.primaryModel
+		return g.primaryModel()
 	}
-	return g.primaryModel
+	return g.primaryModel()
 }
 
 // modelPricing holds USD-per-1k-token rates for one model.

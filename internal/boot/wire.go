@@ -113,11 +113,13 @@ func PickVcs(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsSource, e
 	return nil, fmt.Errorf("unknown vcs.provider: %q", cfg.Provider)
 }
 
-// PickLlm selects an LlmGateway.
-func PickLlm(cfg schemas.LlmConfig, _ ports.SecretsProvider, _ ports.Obs) (ports.LlmGateway, error) {
+// PickLlm selects an LlmGateway. Pass non-nil closures on `models` to
+// hot-reload the per-tier model name on each call; pass the zero value
+// to capture the boot-time cfg values (suitable for one-shot CLIs).
+func PickLlm(cfg schemas.LlmConfig, _ ports.SecretsProvider, _ ports.Obs, models llmlitellm.ModelURLs) (ports.LlmGateway, error) {
 	switch cfg.Provider {
 	case "litellm":
-		return llmlitellm.New(cfg)
+		return llmlitellm.New(cfg, models)
 	case "fake":
 		return nil, fmt.Errorf("the fake LLM lives in internal/testing/fakes; use the harness for tests")
 	}

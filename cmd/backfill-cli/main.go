@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/core/pipelines/backfill"
@@ -79,7 +80,7 @@ func run(cfgPath, repo string, windowDays int, tenantOverride string) error {
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
 	}
-	llm, err := boot.PickLlm(cfg.Llm, secrets, obs)
+	llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{})
 	if err != nil {
 		return fmt.Errorf("llm: %w", err)
 	}
