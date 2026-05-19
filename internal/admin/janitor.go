@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codereviewer/internal/ports/store"
+	"codereviewer/internal/schemas"
 )
 
 // Janitor sweeps retention windows on a configurable interval. It's
@@ -25,18 +26,34 @@ import (
 // Sweep failures are logged and the loop continues; one flaky table
 // must not stall the others.
 type Janitor struct {
-	PrRuns          store.PrRunStore
-	Feedback        store.FeedbackStore
-	Context         store.ContextStore
-	EmbeddingCache  store.EmbeddingCache
-	ExportDir       string
-	PrRunsDays      int
-	FeedbackDays    int
-	PrContextDays   int
-	CacheMaxRows    int
-	ExportMaxFiles  int
-	Interval        time.Duration
-	Obs             obsLogger
+	PrRuns         store.PrRunStore
+	Feedback       store.FeedbackStore
+	Context        store.ContextStore
+	EmbeddingCache store.EmbeddingCache
+	ExportDir      string
+	// Static fallback values, used when Live is nil. cmd/admin-ui wires
+	// Live to read the live overlay so admin-UI tunes take effect on the
+	// next sweep without a restart; tests can supply the fields directly.
+	PrRunsDays     int
+	FeedbackDays   int
+	PrContextDays  int
+	CacheMaxRows   int
+	ExportMaxFiles int
+	Live           func() schemas.RetentionConfig
+	Interval       time.Duration
+	Obs            obsLogger
+}
+
+// retention returns the windows to use for the upcoming sweep. Live
+// (when wired) wins over the static fields so admin-UI saves are
+// observed on the next tick.
+func (j *Janitor) retention() (prRuns, feedback, prContext, cacheMax, exportMax int) {
+	if j.Live != nil {
+		r := j.Live()
+		return r.PrRunsDays, r.FeedbackEventsDays, r.PrContextItemsDays,
+			r.EmbeddingCacheMaxRows, r.AutoExportMaxFiles
+	}
+	return j.PrRunsDays, j.FeedbackDays, j.PrContextDays, j.CacheMaxRows, j.ExportMaxFiles
 }
 
 // obsLogger is the subset of ports.Logger the janitor uses. Declared
@@ -69,9 +86,10 @@ func (j *Janitor) Run(ctx context.Context) {
 
 func (j *Janitor) sweep(ctx context.Context) {
 	now := time.Now()
+	prRunsDays, feedbackDays, prContextDays, cacheMaxRows, exportMaxFiles := j.retention()
 
-	if j.PrRuns != nil && j.PrRunsDays > 0 {
-		cutoff := now.Add(-time.Duration(j.PrRunsDays) * 24 * time.Hour)
+	if j.PrRuns != nil && prRunsDays > 0 {
+		cutoff := now.Add(-time.Duration(prRunsDays) * 24 * time.Hour)
 		if n, err := j.PrRuns.DeleteBefore(ctx, cutoff); err != nil {
 			j.Obs.Error("janitor: pr_runs sweep failed", "err", err.Error())
 		} else if n > 0 {
@@ -79,8 +97,8 @@ func (j *Janitor) sweep(ctx context.Context) {
 		}
 	}
 
-	if j.Feedback != nil && j.FeedbackDays > 0 {
-		cutoff := now.Add(-time.Duration(j.FeedbackDays) * 24 * time.Hour)
+	if j.Feedback != nil && feedbackDays > 0 {
+		cutoff := now.Add(-time.Duration(feedbackDays) * 24 * time.Hour)
 		if n, err := j.Feedback.DeleteBefore(ctx, cutoff); err != nil {
 			j.Obs.Error("janitor: feedback sweep failed", "err", err.Error())
 		} else if n > 0 {
@@ -88,8 +106,8 @@ func (j *Janitor) sweep(ctx context.Context) {
 		}
 	}
 
-	if j.Context != nil && j.PrContextDays > 0 {
-		cutoff := now.Add(-time.Duration(j.PrContextDays) * 24 * time.Hour)
+	if j.Context != nil && prContextDays > 0 {
+		cutoff := now.Add(-time.Duration(prContextDays) * 24 * time.Hour)
 		if n, err := j.Context.DeletePrContextBefore(ctx, cutoff); err != nil {
 			j.Obs.Error("janitor: pr_context sweep failed", "err", err.Error())
 		} else if n > 0 {
@@ -97,19 +115,19 @@ func (j *Janitor) sweep(ctx context.Context) {
 		}
 	}
 
-	if j.EmbeddingCache != nil && j.CacheMaxRows > 0 {
-		if n, err := j.EmbeddingCache.EvictToMax(ctx, j.CacheMaxRows); err != nil {
+	if j.EmbeddingCache != nil && cacheMaxRows > 0 {
+		if n, err := j.EmbeddingCache.EvictToMax(ctx, cacheMaxRows); err != nil {
 			j.Obs.Error("janitor: embedding_cache evict failed", "err", err.Error())
 		} else if n > 0 {
-			j.Obs.Info("janitor: embedding_cache evicted", "rows_deleted", n, "max_rows", j.CacheMaxRows)
+			j.Obs.Info("janitor: embedding_cache evicted", "rows_deleted", n, "max_rows", cacheMaxRows)
 		}
 	}
 
-	if j.ExportDir != "" && j.ExportMaxFiles > 0 {
-		if deleted, err := rotateExportFiles(j.ExportDir, j.ExportMaxFiles); err != nil {
+	if j.ExportDir != "" && exportMaxFiles > 0 {
+		if deleted, err := rotateExportFiles(j.ExportDir, exportMaxFiles); err != nil {
 			j.Obs.Error("janitor: export rotate failed", "err", err.Error())
 		} else if deleted > 0 {
-			j.Obs.Info("janitor: export files rotated", "files_deleted", deleted, "max_files", j.ExportMaxFiles)
+			j.Obs.Info("janitor: export files rotated", "files_deleted", deleted, "max_files", exportMaxFiles)
 		}
 	}
 }

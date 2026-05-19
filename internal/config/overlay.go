@@ -46,6 +46,38 @@ func IsOverlayKey(key string) bool {
 	return false
 }
 
+// RestartRequiredKeys are overlay keys whose consumers capture them at
+// boot, so a worker restart is still required after a UI save before
+// the new value takes effect. Everything else in OverlayKeys is
+// hot-reloaded by boot.Reloader.
+//
+// The boundary is honest, not aspirational: live-reloading the LLM
+// model URL would require recreating the openai client; live-reloading
+// the OTel sink would require tearing down the exporter pipeline.
+// Both are non-trivial and rare-operation changes — restart is fine.
+var RestartRequiredKeys = []string{
+	"rules.git_url",
+	"rules.branch",
+	"tenant.id",
+	"tenant.name",
+	"llm.primary_model_url",
+	"llm.fallback_model_url",
+	"llm.embeddings_url",
+	"observability.sink",
+	"observability.otlp_endpoint",
+	"observability.service_name",
+}
+
+// IsRestartRequired reports whether changing key needs a worker restart.
+func IsRestartRequired(key string) bool {
+	for _, k := range RestartRequiredKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
 // ApplyOverlay reads every OverlayKey from the SettingsStore and writes
 // each present value into cfg. Empty / absent settings leave the TOML
 // default in place. Returns the same config (mutated) for chaining.

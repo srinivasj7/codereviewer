@@ -70,6 +70,13 @@ func run(cfgPath string) error {
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
+	reloader, err := boot.NewReloader(*cfg, stores.Settings, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("settings reloader: %w", err)
+	}
+	go reloader.Run(ctx, obs.Logger)
+	_ = reloader // available for future live-tunable gateway settings
+
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
 		return fmt.Errorf("bus: %w", err)

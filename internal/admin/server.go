@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -298,9 +299,14 @@ func (s *Server) handleSettingsPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := readSession(r, s.secret)
+	// Snapshot current effective values so we can report which keys
+	// actually changed, and bucket the changes into live vs restart.
+	before := make(map[string]string, len(config.OverlayKeys))
+	for _, k := range config.OverlayKeys {
+		before[k] = config.ReadCurrent(s.deps.Cfg, k)
+	}
 	for _, k := range config.OverlayKeys {
 		v := r.PostFormValue(k)
-		// Empty submission deletes the override so the TOML default takes over.
 		if v == "" {
 			if err := s.deps.Settings.Delete(r.Context(), k); err != nil {
 				s.renderError(w, r, "settings", fmt.Errorf("delete %s: %w", k, err))
@@ -318,7 +324,36 @@ func (s *Server) handleSettingsPOST(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, "settings", fmt.Errorf("re-apply overlay: %w", err))
 		return
 	}
-	s.renderOk(w, r, "settings", "Settings saved. Restart workers to pick them up.")
+	var liveChanged, restartChanged []string
+	for _, k := range config.OverlayKeys {
+		after := config.ReadCurrent(s.deps.Cfg, k)
+		if before[k] == after {
+			continue
+		}
+		if config.IsRestartRequired(k) {
+			restartChanged = append(restartChanged, k)
+		} else {
+			liveChanged = append(liveChanged, k)
+		}
+	}
+	s.renderOk(w, r, "settings", saveFlashMessage(liveChanged, restartChanged))
+}
+
+// saveFlashMessage builds the flash text shown after a settings save.
+// Live changes auto-apply on the next ~30s reload tick; restart-required
+// changes are called out by name so the operator knows what to bounce.
+func saveFlashMessage(live, restart []string) string {
+	switch {
+	case len(live) == 0 && len(restart) == 0:
+		return "Settings saved. No values changed."
+	case len(restart) == 0:
+		return fmt.Sprintf("Settings saved. %d value(s) will hot-reload within 30s.", len(live))
+	case len(live) == 0:
+		return fmt.Sprintf("Settings saved. Restart workers to pick up: %s", strings.Join(restart, ", "))
+	default:
+		return fmt.Sprintf("Settings saved. %d value(s) hot-reload within 30s. Restart workers to pick up: %s",
+			len(live), strings.Join(restart, ", "))
+	}
 }
 
 func (s *Server) handleImportGET(w http.ResponseWriter, r *http.Request) {

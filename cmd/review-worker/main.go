@@ -67,6 +67,12 @@ func run(cfgPath string) error {
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
+	reloader, err := boot.NewReloader(*cfg, stores.Settings, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("settings reloader: %w", err)
+	}
+	go reloader.Run(ctx, obs.Logger)
+
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
 		return fmt.Errorf("bus: %w", err)
@@ -96,7 +102,7 @@ func run(cfgPath string) error {
 		CostCaps:         stores.CostCaps,
 		EmbeddingCache:   stores.EmbeddingCache,
 		ContextProviders: providers,
-		TokenCap:         cfg.Llm.PerPrTokenCap,
+		TokenCap:         func() int { return reloader.Current().Llm.PerPrTokenCap },
 	})
 
 	sub, err := bus.Consume(ctx, ports.QueueReview, pipeline.Handle)

@@ -21,6 +21,7 @@ import (
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/ports"
+	"codereviewer/internal/schemas"
 )
 
 func main() {
@@ -59,6 +60,12 @@ func run(cfgPath string) error {
 
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
+
+	reloader, err := boot.NewReloader(*cfg, stores.Settings, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("settings reloader: %w", err)
+	}
+	go reloader.Run(ctx, obs.Logger)
 
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
@@ -113,11 +120,7 @@ func run(cfgPath string) error {
 			Context:        stores.Context,
 			EmbeddingCache: stores.EmbeddingCache,
 			ExportDir:      cfg.Admin.ExportDir,
-			PrRunsDays:     cfg.Retention.PrRunsDays,
-			FeedbackDays:   cfg.Retention.FeedbackEventsDays,
-			PrContextDays:  cfg.Retention.PrContextItemsDays,
-			CacheMaxRows:   cfg.Retention.EmbeddingCacheMaxRows,
-			ExportMaxFiles: cfg.Retention.AutoExportMaxFiles,
+			Live:           func() schemas.RetentionConfig { return reloader.Current().Retention },
 			Interval:       time.Duration(cfg.Retention.JanitorIntervalHours) * time.Hour,
 			Obs:            obs.Logger,
 		}

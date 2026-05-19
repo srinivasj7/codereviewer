@@ -77,9 +77,12 @@ type Deps struct {
 	CostCaps         store.CostCapStore
 	EmbeddingCache   store.EmbeddingCache
 	ContextProviders []ports.ContextProvider
-	TokenCap         int    // 0 = default
-	SystemPrompt     string // empty = default
-	EmbeddingModel   string // empty = adapter default
+	// TokenCap returns the current per-PR token cap. nil = use default.
+	// The boot wires this to read live from the settings overlay so the
+	// admin UI can tune it without a restart.
+	TokenCap       func() int
+	SystemPrompt   string // empty = default
+	EmbeddingModel string // empty = adapter default
 }
 
 // Pipeline is the per-PR review use case.
@@ -89,8 +92,8 @@ type Pipeline struct {
 
 // NewPipeline applies defaults and returns a ready-to-run pipeline.
 func NewPipeline(deps Deps) *Pipeline {
-	if deps.TokenCap <= 0 {
-		deps.TokenCap = budgets.DefaultPerPrTokenCap
+	if deps.TokenCap == nil {
+		deps.TokenCap = func() int { return budgets.DefaultPerPrTokenCap }
 	}
 	if deps.SystemPrompt == "" {
 		deps.SystemPrompt = prompt.DefaultSystemPrompt
@@ -203,7 +206,10 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	contextSections := p.fetchContext(ctx, ref)
 	sw.Mark("fetch_context")
 
-	tokenCap := p.deps.TokenCap
+	tokenCap := p.deps.TokenCap()
+	if tokenCap <= 0 {
+		tokenCap = budgets.DefaultPerPrTokenCap
+	}
 	if costCap.PerPrTokenCap > 0 && costCap.PerPrTokenCap < tokenCap {
 		tokenCap = costCap.PerPrTokenCap
 	}
