@@ -38,9 +38,7 @@ func TestParseRule_CRLF(t *testing.T) {
 }
 
 func TestParseRule_BOMStripped(t *testing.T) {
-	// utf8BOMBytes is a private package var; build a BOM-prefixed input.
-	bom := []byte{0xEF, 0xBB, 0xBF}
-	src := append(bom, []byte("---\ntitle: Foo\n---\n\nbody\n")...)
+	src := []byte("\xEF\xBB\xBF---\ntitle: Foo\n---\n\nbody\n")
 	fm, _, err := parseRule(src)
 	if err != nil {
 		t.Fatalf("parseRule error: %v", err)

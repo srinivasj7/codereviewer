@@ -80,21 +80,20 @@ func PickSecrets(cfg schemas.SecretsConfig) (ports.SecretsProvider, error) {
 // stays runnable — telemetry is best-effort.
 func PickObservability(ctx context.Context, cfg schemas.ObservabilityConfig) (ports.Obs, func(context.Context) error) {
 	noShutdown := func(context.Context) error { return nil }
-	switch cfg.Sink {
-	case "otel":
-		if cfg.OtlpEndpoint == "" {
-			return obsstdout.New(cfg.ServiceName), noShutdown
-		}
-		obs, shutdown, err := obsotel.New(ctx, cfg.ServiceName, cfg.OtlpEndpoint)
-		if err != nil {
-			fallback := obsstdout.New(cfg.ServiceName)
-			fallback.Logger.Warn("obsotel init failed; falling back to stdout",
-				"endpoint", cfg.OtlpEndpoint, "err", err.Error())
-			return fallback, noShutdown
-		}
-		return obs, shutdown
+	if cfg.Sink != "otel" {
+		return obsstdout.New(cfg.ServiceName), noShutdown
 	}
-	return obsstdout.New(cfg.ServiceName), noShutdown
+	if cfg.OtlpEndpoint == "" {
+		return obsstdout.New(cfg.ServiceName), noShutdown
+	}
+	obs, shutdown, err := obsotel.New(ctx, cfg.ServiceName, cfg.OtlpEndpoint)
+	if err != nil {
+		fallback := obsstdout.New(cfg.ServiceName)
+		fallback.Logger.Warn("obsotel init failed; falling back to stdout",
+			"endpoint", cfg.OtlpEndpoint, "err", err.Error())
+		return fallback, noShutdown
+	}
+	return obs, shutdown
 }
 
 // PickClock returns the system clock.

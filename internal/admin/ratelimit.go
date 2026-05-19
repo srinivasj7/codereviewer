@@ -81,15 +81,3 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// limitedHandler wraps next, denying any request whose source IP has
-// exceeded `limit` requests in the rolling window.
-func limitedHandler(limiter *rateLimiter, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		if !limiter.allow(ip) {
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}

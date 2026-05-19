@@ -1,6 +1,6 @@
 // Package admin holds the web UI handlers, session middleware, and
-// import/export logic for cmd/admin-ui. Templates are embedded via
-// go:embed so the binary ships standalone.
+// import/export logic for cmd/admin-ui. Templates are embedded into
+// the binary (see server.go) so the binary ships standalone.
 package admin
 
 import (

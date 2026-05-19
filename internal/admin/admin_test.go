@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -204,15 +205,15 @@ func TestExportConfig_RoundTrip(t *testing.T) {
 	cfg.Llm.PerPrTokenCap = 7777
 	cfg.Cost.DailyUsdCapDefault = 3.3
 	cfg.Rules.GitURL = "https://r"
-	snap, err := ExportConfig(nil, cfg)
+	snap, err := ExportConfig(context.Background(), cfg)
 	require.NoError(t, err)
 	require.Equal(t, "https://r", snap.Settings["rules.git_url"])
 	require.Equal(t, "7777", snap.Settings["llm.per_pr_token_cap"])
 
 	// ImportConfig writes each value into the SettingsStore.
 	settings := fakes.NewSettingsStore()
-	require.NoError(t, ImportConfig(nil, snap, settings, "test"))
-	got, found, _ := settings.Get(nil, "rules.git_url")
+	require.NoError(t, ImportConfig(context.Background(), snap, settings, "test"))
+	got, found, _ := settings.Get(context.Background(), "rules.git_url")
 	require.True(t, found)
 	require.Equal(t, "https://r", got)
 }
@@ -224,12 +225,12 @@ func TestImportConfig_RejectsUnknownKey(t *testing.T) {
 		Settings: map[string]string{"not.a.real.key": "x"},
 	}
 	settings := fakes.NewSettingsStore()
-	err := ImportConfig(nil, snap, settings, "test")
+	err := ImportConfig(context.Background(), snap, settings, "test")
 	require.Error(t, err)
 }
 
 func TestImportData_RejectsWrongKind(t *testing.T) {
-	err := ImportData(nil, nil, DataSnapshot{Kind: SnapshotConfig})
+	err := ImportData(context.Background(), nil, DataSnapshot{Kind: SnapshotConfig})
 	require.Error(t, err)
 }
 

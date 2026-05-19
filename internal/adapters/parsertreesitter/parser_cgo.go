@@ -92,15 +92,15 @@ func classify(n *sitter.Node, content string) (kind, name string) {
 	}
 	switch n.Type() {
 	case "function_declaration":
-		return "function", childText(n, "name", content)
+		return "function", childText(n, content)
 	case "class_declaration":
-		return "class", childText(n, "name", content)
+		return "class", childText(n, content)
 	case "method_definition":
-		return "method", childText(n, "name", content)
+		return "method", childText(n, content)
 	case "interface_declaration":
-		return "interface", childText(n, "name", content)
+		return "interface", childText(n, content)
 	case "type_alias_declaration":
-		return "type", childText(n, "name", content)
+		return "type", childText(n, content)
 	case "lexical_declaration", "variable_declaration":
 		// Top-level const/let/var — emit only if it binds a function/arrow.
 		if hasArrowFunction(n, content) {
@@ -110,8 +110,8 @@ func classify(n *sitter.Node, content string) (kind, name string) {
 	return "", ""
 }
 
-func childText(n *sitter.Node, fieldName, content string) string {
-	c := n.ChildByFieldName(fieldName)
+func childText(n *sitter.Node, content string) string {
+	c := n.ChildByFieldName("name")
 	if c == nil {
 		return ""
 	}

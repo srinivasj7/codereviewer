@@ -55,3 +55,7 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+          # Build golangci-lint from source using the setup-go toolchain
+          # above (Go 1.25). The prebuilt binary on the stable channel is
+          # Go-1.24-built and can't typecheck our 1.25 source.
+          install-mode: 'goinstall'
