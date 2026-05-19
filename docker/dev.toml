@@ -28,6 +28,10 @@ fallback_model_url = "fallback"
 embeddings_url     = "embeddings"
 api_key            = "${LITELLM_MASTER_KEY}"
 per_pr_token_cap   = 30000
+# Bumped for local Ollama (qwen2.5:32b-instruct first-call warmup).
+# Hosted providers (OpenAI/Anthropic) work fine with smaller values.
+chat_timeout_sec   = 600
+embed_timeout_sec  = 120
 
 [secrets]
 provider = "env"

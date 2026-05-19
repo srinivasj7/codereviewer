@@ -122,6 +122,11 @@ type LlmConfig struct {
 	EmbeddingsURL    string `toml:"embeddings_url"`
 	APIKey           string `toml:"api_key"`
 	PerPrTokenCap    int    `toml:"per_pr_token_cap"`
+	// ChatTimeoutSec / EmbedTimeoutSec bound each LLM call. Default is
+	// fine for hosted providers (OpenAI/Anthropic); bump for local Ollama
+	// where the first call may need to warm a 30B+ model into RAM.
+	ChatTimeoutSec  int `toml:"chat_timeout_sec"`
+	EmbedTimeoutSec int `toml:"embed_timeout_sec"`
 }
 
 // SecretsConfig selects the secrets provider.
@@ -202,6 +207,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Llm.PerPrTokenCap <= 0 {
 		c.Llm.PerPrTokenCap = 30000
+	}
+	if c.Llm.ChatTimeoutSec <= 0 {
+		c.Llm.ChatTimeoutSec = 90
+	}
+	if c.Llm.EmbedTimeoutSec <= 0 {
+		c.Llm.EmbedTimeoutSec = 60
 	}
 	if c.Cost.DailyUsdCapDefault <= 0 {
 		c.Cost.DailyUsdCapDefault = 5.00

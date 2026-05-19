@@ -27,6 +27,8 @@ type Gateway struct {
 	primaryModel    string
 	fallbackModel   string
 	embeddingsModel string
+	chatTimeout     time.Duration
+	embedTimeout    time.Duration
 
 	encMu    sync.Mutex
 	encoders map[string]*tiktoken.Tiktoken
@@ -47,6 +49,8 @@ func New(cfg schemas.LlmConfig) (*Gateway, error) {
 		primaryModel:    cfg.PrimaryModelURL,
 		fallbackModel:   cfg.FallbackModelURL,
 		embeddingsModel: cfg.EmbeddingsURL,
+		chatTimeout:     time.Duration(cfg.ChatTimeoutSec) * time.Second,
+		embedTimeout:    time.Duration(cfg.EmbedTimeoutSec) * time.Second,
 		encoders:        make(map[string]*tiktoken.Tiktoken),
 	}
 	// Warm the tokenizer for the primary model so the first review call
@@ -65,7 +69,7 @@ func (g *Gateway) Chat(ctx context.Context, req ports.ChatRequest) (ports.ChatRe
 		return ports.ChatResponse{}, fmt.Errorf("no model configured for tier %s", req.Tier)
 	}
 
-	ctx2, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx2, cancel := context.WithTimeout(ctx, g.chatTimeout)
 	defer cancel()
 
 	resp, err := g.client.CreateChatCompletion(ctx2, openai.ChatCompletionRequest{
@@ -111,7 +115,7 @@ func (g *Gateway) Embed(ctx context.Context, texts []string, opts ports.EmbedOpt
 		return nil, nil
 	}
 
-	ctx2, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx2, cancel := context.WithTimeout(ctx, g.embedTimeout)
 	defer cancel()
 
 	resp, err := g.client.CreateEmbeddings(ctx2, openai.EmbeddingRequest{

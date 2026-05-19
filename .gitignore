@@ -41,3 +41,6 @@ coverage.html
 # Temp
 tmp/
 .commit-msg.tmp
+
+# pem file
+codereviewer-srinivasj7.2026-05-18.private-key.pem

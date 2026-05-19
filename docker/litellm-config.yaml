@@ -2,29 +2,37 @@
 # (primary, fallback, embeddings) match dev.toml so the Go gateway
 # can route by tier without knowing the upstream provider details.
 #
-# Swap the litellm_params.model values to use a different provider
-# (e.g., "anthropic/claude-sonnet-4-6", "azure/gpt-4o").
+# Currently routed to a local Ollama on the host. host.docker.internal
+# resolves to the host's gateway on Docker Desktop (Win/Mac); for Linux
+# Docker, add `extra_hosts: ["host.docker.internal:host-gateway"]` to
+# the litellm service in docker-compose.yml.
+#
+# Run on the host before bringing the stack up:
+#   ollama pull qwen2.5:32b-instruct
+#   ollama pull mxbai-embed-large
 
 model_list:
   - model_name: primary
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+      model: ollama_chat/qwen2.5:32b-instruct
+      api_base: http://host.docker.internal:11434
+      timeout: 600
 
   - model_name: fallback
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
+      model: ollama_chat/qwen2.5:32b-instruct
+      api_base: http://host.docker.internal:11434
+      timeout: 600
 
   - model_name: embeddings
     litellm_params:
-      model: openai/text-embedding-3-small
-      api_key: os.environ/OPENAI_API_KEY
+      model: ollama/mxbai-embed-large
+      api_base: http://host.docker.internal:11434
 
 litellm_settings:
   drop_params: true
   num_retries: 2
-  request_timeout: 60
+  request_timeout: 600
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
