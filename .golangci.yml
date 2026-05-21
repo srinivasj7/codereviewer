@@ -22,8 +22,9 @@ linters-settings:
     # Pipeline orchestrators (review.process, admin run, janitor sweep)
     # are intentionally long top-to-bottom flows with branching at every
     # stage. Splitting them into helpers obscures the sequence; raise the
-    # threshold to ~the largest of those instead.
-    min-complexity: 35
+    # threshold to ~the largest of those instead. Bumped 35→40 in slice
+    # 7 to fit the incremental-diff branch on review.process.
+    min-complexity: 40
   revive:
     rules:
       - name: exported
