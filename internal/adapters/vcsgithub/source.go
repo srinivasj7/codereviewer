@@ -246,6 +246,33 @@ func (s *Source) FetchDiff(ctx context.Context, ref ports.PrRef) (ports.UnifiedD
 	}, nil
 }
 
+// FetchDiffBetween uses GitHub's compare API with the diff media type
+// to return the unified diff between two arbitrary commits.
+func (s *Source) FetchDiffBetween(ctx context.Context, repoId ports.RepoId, baseSha, headSha string) (ports.UnifiedDiff, error) {
+	owner, name, err := parseRepoId(repoId)
+	if err != nil {
+		return ports.UnifiedDiff{}, err
+	}
+	// go-github doesn't expose CompareCommitsRaw with a Diff media
+	// type; reach for the raw HTTP path so we get text/plain unified
+	// diff output back. The installation transport adds auth headers.
+	url := fmt.Sprintf("repos/%s/%s/compare/%s...%s", owner, name, baseSha, headSha)
+	req, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return ports.UnifiedDiff{}, fmt.Errorf("build compare request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github.diff")
+	var buf strings.Builder
+	if _, err := s.client.Do(ctx, req, &buf); err != nil {
+		return ports.UnifiedDiff{}, fmt.Errorf("fetch compare diff: %w", err)
+	}
+	return ports.UnifiedDiff{
+		BaseSha: baseSha,
+		HeadSha: headSha,
+		Content: buf.String(),
+	}, nil
+}
+
 // FetchPrMeta returns title, body, and head branch name for the PR.
 // Used by issue-tracker context providers to scan for ticket references.
 func (s *Source) FetchPrMeta(ctx context.Context, ref ports.PrRef) (ports.PrMeta, error) {

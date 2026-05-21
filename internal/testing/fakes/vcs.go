@@ -19,6 +19,7 @@ import (
 type Vcs struct {
 	mu               sync.Mutex
 	diffByRef        map[string]ports.UnifiedDiff
+	diffBetween      map[string]ports.UnifiedDiff
 	prComments       map[string][]ports.HumanComment
 	prMeta           map[string]ports.PrMeta
 	filesAt          map[string]string
@@ -74,6 +75,36 @@ func (v *Vcs) UpdateChecks() []UpdateCheckCall {
 // VerifyWebhook is not implemented for the fake.
 func (v *Vcs) VerifyWebhook(_ context.Context, _ http.Header, _ []byte) (ports.WebhookEvent, error) {
 	return ports.WebhookEvent{}, errors.New("fake vcs: VerifyWebhook not implemented")
+}
+
+// SetDiffBetween stores the diff returned by FetchDiffBetween for the
+// (repoId, baseSha, headSha) triple.
+func (v *Vcs) SetDiffBetween(repoId ports.RepoId, baseSha, headSha string, diff ports.UnifiedDiff) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.diffBetween == nil {
+		v.diffBetween = make(map[string]ports.UnifiedDiff)
+	}
+	v.diffBetween[diffBetweenKey(repoId, baseSha, headSha)] = diff
+}
+
+// FetchDiffBetween returns the diff previously installed via
+// SetDiffBetween, or falls back to a synthesized diff for tests that
+// only set up the full FetchDiff path.
+func (v *Vcs) FetchDiffBetween(_ context.Context, repoId ports.RepoId, baseSha, headSha string) (ports.UnifiedDiff, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.FetchDiffErr != nil {
+		return ports.UnifiedDiff{}, v.FetchDiffErr
+	}
+	if d, ok := v.diffBetween[diffBetweenKey(repoId, baseSha, headSha)]; ok {
+		return d, nil
+	}
+	return ports.UnifiedDiff{}, fmt.Errorf("fake vcs: no diff between %s %s..%s", repoId, baseSha, headSha)
+}
+
+func diffBetweenKey(repoId ports.RepoId, baseSha, headSha string) string {
+	return string(repoId) + ":" + baseSha + ".." + headSha
 }
 
 // FetchDiff returns the diff previously installed via SetDiff.

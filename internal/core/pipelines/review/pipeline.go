@@ -163,10 +163,27 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		return p.postBudgetExceeded(ctx, ref, runId)
 	}
 
-	diff, err := p.deps.Vcs.FetchDiff(ctx, ref)
+	// If the bot already reviewed an earlier head_sha on this PR, scope
+	// the diff to the **incremental** changes between then and now so
+	// Qwen doesn't re-comment on unchanged lines. Falls back to the full
+	// PR diff for first-time reviews and when the prior run's head_sha
+	// matches the current one (re-trigger of the same head).
+	prevHead, incremental := p.findPreviousReviewedHead(ctx, ref)
+	var diff ports.UnifiedDiff
+	if incremental {
+		diff, err = p.deps.Vcs.FetchDiffBetween(ctx, ref.RepoId, prevHead, ref.HeadSha)
+	} else {
+		diff, err = p.deps.Vcs.FetchDiff(ctx, ref)
+	}
 	sw.Mark("fetch_diff")
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("fetch diff: %w", err))
+	}
+	// Empty incremental diff means the head changed but no source lines
+	// changed (e.g., a force-push that only updated commit metadata).
+	// Nothing to review.
+	if incremental && strings.TrimSpace(diff.Content) == "" {
+		return p.postNoChanges(ctx, ref, runId, prevHead)
 	}
 
 	changedPaths := extractChangedFiles(diff.Content)
@@ -470,6 +487,53 @@ func droppedNames(sections []prompt.Section) []string {
 		out[i] = s.String()
 	}
 	return out
+}
+
+// findPreviousReviewedHead looks for the most recent successful review
+// on this PR. Returns its head_sha + true when the prior head differs
+// from the current one (so an incremental diff is meaningful). For
+// first-time reviews or repeated runs on the same head, returns false.
+func (p *Pipeline) findPreviousReviewedHead(ctx context.Context, ref ports.PrRef) (string, bool) {
+	if p.deps.PrRuns == nil {
+		return "", false
+	}
+	runs, err := p.deps.PrRuns.GetRecent(ctx, ref.RepoId, ref.PrNumber, 20)
+	if err != nil {
+		p.deps.Obs.Logger.Warn("findPreviousReviewedHead: query failed", "err", err.Error())
+		return "", false
+	}
+	for _, r := range runs {
+		// Only successful posts count as "reviewed". Failed/budget-skipped
+		// runs leave the diff unreviewed, so a re-attempt should see the
+		// whole thing.
+		if r.Status != store.RunStatusPosted {
+			continue
+		}
+		if r.Ref.HeadSha == "" || r.Ref.HeadSha == ref.HeadSha {
+			continue
+		}
+		return r.Ref.HeadSha, true
+	}
+	return "", false
+}
+
+// postNoChanges handles the edge case where the incremental diff is
+// empty — head changed but no source lines did. Records a finished
+// run with status=posted (zero comments) and passes the check.
+func (p *Pipeline) postNoChanges(ctx context.Context, ref ports.PrRef, runId store.RunId, prevHead string) error {
+	p.deps.Obs.Logger.Info("review skipped; no diff between prior reviewed head and current",
+		"pr_number", ref.PrNumber, "prev_head", prevHead, "head_sha", ref.HeadSha)
+	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+		Name:       "code-review-bot/review",
+		Conclusion: "success",
+		Summary:    "No new diff since last review",
+	}); err != nil {
+		p.deps.Obs.Logger.Warn("update check failed", "err", err.Error())
+	}
+	return p.deps.PrRuns.Finish(ctx, runId, store.RunResult{
+		Status:     store.RunStatusPosted,
+		FinishedAt: p.deps.Clock.Now(),
+	})
 }
 
 func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runId store.RunId) error {
