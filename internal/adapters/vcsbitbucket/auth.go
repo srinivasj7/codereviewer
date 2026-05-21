@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const tokenURL = "https://bitbucket.org/site/oauth2/access_token"
+// tokenURL is Bitbucket Cloud's OAuth 2.0 token endpoint. gosec G101
+// flags any constant containing "token" as a potential hardcoded
+// credential; this is a public URL, not a secret.
+const tokenURL = "https://bitbucket.org/site/oauth2/access_token" //nolint:gosec // G101: public endpoint URL, not a secret
 
 // tokenSource fetches OAuth 2.0 client-credentials grant tokens from
 // Bitbucket Cloud and caches them in memory until just before expiry.
