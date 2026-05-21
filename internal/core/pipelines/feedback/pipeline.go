@@ -30,6 +30,10 @@ type Deps struct {
 // Pipeline is the feedback use case.
 type Pipeline struct {
 	deps Deps
+	// conv carries optional slice-8 (conversation mode) deps. Wired
+	// via SetConversationDeps; when zero-value, the bot stays silent
+	// after recording the feedback signal (pre-slice-8 behavior).
+	conv conversationDeps
 }
 
 // NewPipeline returns a Pipeline ready to Handle.
@@ -92,6 +96,11 @@ func (p *Pipeline) Handle(ctx context.Context, payload []byte, cctx ports.Consum
 		"signal", string(signal),
 		"latency_ms", time.Since(now).Milliseconds(),
 	)
+
+	// Slice 8 — if conversation mode is wired + enabled, optionally
+	// reply to the human's question. No-op when deps unset.
+	p.maybeReply(ctx, c, job)
+
 	return cctx.Ack()
 }
 

@@ -26,6 +26,23 @@ type Config struct {
 	Context       ContextConfig       `toml:"context"`
 	Retention     RetentionConfig     `toml:"retention"`
 	RateLimit     RateLimitConfig     `toml:"rate_limit"`
+	Conversation  ConversationConfig  `toml:"conversation"`
+}
+
+// ConversationConfig controls the bot's reply-to-replies behavior
+// (slice 8). When a human reply on a bot comment matches a configured
+// trigger, the bot runs a focused clarification LLM call and posts
+// a nested reply. Hard caps on per-PR reply count + per-PR USD spend
+// prevent the bot from being drawn into an LLM-loop.
+//
+// Disabled by default — the historical behavior is "bot doesn't speak
+// after the initial review".
+type ConversationConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	MaxRepliesPerPr int      `toml:"max_replies_per_pr"` // default 2
+	TriggerSuffixes []string `toml:"trigger_suffixes"`   // default ["?"]
+	TriggerPrefixes []string `toml:"trigger_prefixes"`   // default ["/explain"]
+	MaxOutputTokens int      `toml:"max_output_tokens"`  // default 300
 }
 
 // RetentionConfig caps the growth of append-mostly tables and on-disk
@@ -227,6 +244,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Llm.EmbedTimeoutSec <= 0 {
 		c.Llm.EmbedTimeoutSec = 60
+	}
+	if c.Conversation.MaxRepliesPerPr <= 0 {
+		c.Conversation.MaxRepliesPerPr = 2
+	}
+	if len(c.Conversation.TriggerSuffixes) == 0 {
+		c.Conversation.TriggerSuffixes = []string{"?"}
+	}
+	if len(c.Conversation.TriggerPrefixes) == 0 {
+		c.Conversation.TriggerPrefixes = []string{"/explain"}
+	}
+	if c.Conversation.MaxOutputTokens <= 0 {
+		c.Conversation.MaxOutputTokens = 300
 	}
 	if c.Cost.DailyUsdCapDefault <= 0 {
 		c.Cost.DailyUsdCapDefault = 5.00

@@ -344,6 +344,32 @@ func (s *Source) PostReview(ctx context.Context, ref ports.PrRef, review ports.R
 	}, nil
 }
 
+// PostCommentReply threads a comment under an existing PR comment via
+// Bitbucket's POST /pullrequests/{n}/comments endpoint with the
+// parent.id field set.
+func (s *Source) PostCommentReply(ctx context.Context, repoId ports.RepoId, prNumber int, parentCommentId int64, body string) (int64, error) {
+	ws, slug, err := parseRepoId(repoId)
+	if err != nil {
+		return 0, err
+	}
+	path := fmt.Sprintf("/repositories/%s/%s/pullrequests/%d/comments", ws, slug, prNumber)
+	reqBody := map[string]any{
+		"content": map[string]any{"raw": body},
+		"parent":  map[string]any{"id": parentCommentId},
+	}
+	var resp struct {
+		Id int64 `json:"id"`
+	}
+	status, err := s.api.postJSON(ctx, path, reqBody, &resp)
+	if err != nil {
+		return 0, fmt.Errorf("post reply: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return 0, fmt.Errorf("post reply: status %d", status)
+	}
+	return resp.Id, nil
+}
+
 // UpdateCheck writes a build status to the head commit. Bitbucket
 // states: SUCCESSFUL | FAILED | INPROGRESS | STOPPED. We map our
 // {success, failure, neutral, timed_out} into the closest fit:

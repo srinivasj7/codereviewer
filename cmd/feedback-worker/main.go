@@ -14,10 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"codereviewer/internal/adapters/llmlitellm"
 	"codereviewer/internal/boot"
 	"codereviewer/internal/config"
 	"codereviewer/internal/core/pipelines/feedback"
 	"codereviewer/internal/ports"
+	"codereviewer/internal/schemas"
 )
 
 func main() {
@@ -62,7 +64,6 @@ func run(cfgPath string) error {
 		return fmt.Errorf("settings reloader: %w", err)
 	}
 	go reloader.Run(ctx, obs.Logger)
-	_ = reloader // available for future live-tunable feedback settings
 
 	bus, err := boot.PickBus(ctx, cfg.MessageBus, obs)
 	if err != nil {
@@ -75,6 +76,35 @@ func run(cfgPath string) error {
 		Clock:    clock,
 		Obs:      obs,
 	})
+
+	// Slice 8 — conversation mode. Wired only when [conversation].enabled
+	// is true on boot; the closures still read live overlay values so the
+	// admin UI can flip triggers/cap at runtime.
+	if cfg.Conversation.Enabled {
+		secrets, err := boot.PickSecrets(cfg.Secrets)
+		if err != nil {
+			return fmt.Errorf("secrets: %w", err)
+		}
+		vcs, err := boot.PickVcs(cfg.Vcs, secrets)
+		if err != nil {
+			return fmt.Errorf("vcs: %w", err)
+		}
+		llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{
+			Primary:    func() string { return reloader.Current().Llm.PrimaryModelURL },
+			Fallback:   func() string { return reloader.Current().Llm.FallbackModelURL },
+			Embeddings: func() string { return reloader.Current().Llm.EmbeddingsURL },
+		})
+		if err != nil {
+			return fmt.Errorf("llm: %w", err)
+		}
+		pipeline.SetConversationDeps(vcs, llm, stores.CostCaps,
+			func() schemas.ConversationConfig { return reloader.Current().Conversation })
+		obs.Logger.Info("conversation mode enabled",
+			"max_replies_per_pr", cfg.Conversation.MaxRepliesPerPr,
+			"trigger_suffixes", cfg.Conversation.TriggerSuffixes,
+			"trigger_prefixes", cfg.Conversation.TriggerPrefixes,
+		)
+	}
 
 	sub, err := bus.Consume(ctx, ports.QueueFeedback, pipeline.Handle)
 	if err != nil {

@@ -104,6 +104,22 @@ Once `feedback-worker` is running, the system captures:
 - **Reactions on bot comments** — `+1`/`heart`/`hooray`/`rocket` → `accepted` (`thumbs-up`); `-1`/`confused` → `dismissed` (`thumbs-down`).
 - **Replies under bot comments** → `discussed` (`replied`).
 
+### Conversation mode (slice 8)
+
+Off by default. Flip `[conversation].enabled = true` in `dev.toml` and the bot will reply when a human follow-up on one of its inline comments matches a trigger. Defaults:
+
+| Trigger | Match |
+|---|---|
+| Suffix `?` | "why is this wrong?" |
+| Prefix `/explain` | "/explain how that breaks" |
+
+Hard guarantees against LLM loops:
+- `max_replies_per_pr` (default **2**) — counted from `review_comments.source='bot-reply'` rows.
+- Daily USD cap (shared with the review pipeline) — bot stays silent when exceeded.
+- Bot only replies to *direct* replies on its own (`source='bot'`) inline comments — second-level reply threads don't re-trigger.
+
+The clarification call uses a narrow system prompt: stay on the original concern, don't introduce new criticism, plain-text output, ~300 token cap.
+
 The implicit "lines-modified-after-the-comment" signal from design §6.3 is tracked but not yet implemented; see [`implementation-plan.md`](./implementation-plan.md) deviations for slice 4.
 
 ## Observability

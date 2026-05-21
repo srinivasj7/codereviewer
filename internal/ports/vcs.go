@@ -32,6 +32,11 @@ type VcsSource interface {
 	// history window; rate-limit handling is the adapter's concern.
 	SearchClosedPrs(ctx context.Context, repoId RepoId, since time.Time) ([]int, error)
 	PostReview(ctx context.Context, ref PrRef, review ReviewPayload) (PostedReview, error)
+	// PostCommentReply threads a new comment under an existing one
+	// (parentCommentId). The conversation handler (slice 8) uses this
+	// to clarify a previously-posted bot comment when a human asks
+	// a follow-up question. Returns the new comment's external id.
+	PostCommentReply(ctx context.Context, repoId RepoId, prNumber int, parentCommentId int64, body string) (int64, error)
 	UpdateCheck(ctx context.Context, ref PrRef, result CheckResult) error
 }
 

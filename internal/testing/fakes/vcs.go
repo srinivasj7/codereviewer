@@ -24,8 +24,9 @@ type Vcs struct {
 	prMeta           map[string]ports.PrMeta
 	filesAt          map[string]string
 	closedPrs        []int
-	postReviewCalls  []PostReviewCall
-	updateCheckCalls []UpdateCheckCall
+	postReviewCalls       []PostReviewCall
+	updateCheckCalls      []UpdateCheckCall
+	postCommentReplyCalls []PostCommentReplyCall
 	FetchDiffErr     error
 	PostReviewErr    error
 }
@@ -229,6 +230,37 @@ func (v *Vcs) UpdateCheck(_ context.Context, ref ports.PrRef, result ports.Check
 	defer v.mu.Unlock()
 	v.updateCheckCalls = append(v.updateCheckCalls, UpdateCheckCall{Ref: ref, Result: result})
 	return nil
+}
+
+// PostCommentReplyCall records one PostCommentReply invocation.
+type PostCommentReplyCall struct {
+	RepoId          ports.RepoId
+	PrNumber        int
+	ParentCommentId int64
+	Body            string
+}
+
+// PostCommentReplies returns a snapshot of recorded PostCommentReply calls.
+func (v *Vcs) PostCommentReplies() []PostCommentReplyCall {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]PostCommentReplyCall, len(v.postCommentReplyCalls))
+	copy(out, v.postCommentReplyCalls)
+	return out
+}
+
+// PostCommentReply records the call and returns a synthesized id.
+func (v *Vcs) PostCommentReply(_ context.Context, repoId ports.RepoId, prNumber int, parentCommentId int64, body string) (int64, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.postCommentReplyCalls = append(v.postCommentReplyCalls, PostCommentReplyCall{
+		RepoId:          repoId,
+		PrNumber:        prNumber,
+		ParentCommentId: parentCommentId,
+		Body:            body,
+	})
+	// Synthesize a unique id; tests can assert against it.
+	return int64(len(v.postCommentReplyCalls) * 7919), nil
 }
 
 func diffKey(ref ports.PrRef) string {

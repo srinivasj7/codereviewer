@@ -114,3 +114,14 @@ login_attempts          = 5
 login_window_minutes    = 15
 webhook_per_second      = 100
 webhook_max_body_bytes  = 1048576
+
+# Conversation mode (slice 8) — bot replies to follow-up questions on
+# its own inline comments. Disabled by default; flip enabled = true
+# and the feedback-worker will run a focused LLM call when a human
+# reply matches a trigger. Hard cap per PR prevents LLM loops.
+[conversation]
+enabled              = false
+max_replies_per_pr   = 2
+trigger_suffixes     = ["?"]
+trigger_prefixes     = ["/explain"]
+max_output_tokens    = 300
