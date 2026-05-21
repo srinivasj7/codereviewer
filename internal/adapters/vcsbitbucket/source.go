@@ -82,6 +82,29 @@ func (s *Source) FetchDiff(ctx context.Context, ref ports.PrRef) (ports.UnifiedD
 	return ports.UnifiedDiff{HeadSha: ref.HeadSha, Content: string(body)}, nil
 }
 
+// FetchDiffBetween returns the unified diff between two commits via
+// Bitbucket's /diff/{spec} endpoint. spec format is "<head>..<base>"
+// (Bitbucket's convention has head first).
+func (s *Source) FetchDiffBetween(ctx context.Context, repoId ports.RepoId, baseSha, headSha string) (ports.UnifiedDiff, error) {
+	ws, slug, err := parseRepoId(repoId)
+	if err != nil {
+		return ports.UnifiedDiff{}, err
+	}
+	path := fmt.Sprintf("/repositories/%s/%s/diff/%s..%s", ws, slug, headSha, baseSha)
+	body, status, err := s.api.getRaw(ctx, path, "text/plain")
+	if err != nil {
+		return ports.UnifiedDiff{}, fmt.Errorf("fetch compare diff: %w", err)
+	}
+	if status != http.StatusOK {
+		return ports.UnifiedDiff{}, fmt.Errorf("fetch compare diff: status %d", status)
+	}
+	return ports.UnifiedDiff{
+		BaseSha: baseSha,
+		HeadSha: headSha,
+		Content: string(body),
+	}, nil
+}
+
 // FetchPrMeta returns title, body, and source branch name.
 func (s *Source) FetchPrMeta(ctx context.Context, ref ports.PrRef) (ports.PrMeta, error) {
 	ws, slug, err := parseRepoId(ref.RepoId)

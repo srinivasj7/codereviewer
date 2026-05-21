@@ -13,6 +13,13 @@ import (
 type VcsSource interface {
 	VerifyWebhook(ctx context.Context, headers http.Header, rawBody []byte) (WebhookEvent, error)
 	FetchDiff(ctx context.Context, ref PrRef) (UnifiedDiff, error)
+	// FetchDiffBetween returns the unified diff between two arbitrary
+	// commits in the repo. Used by the review pipeline to fetch the
+	// **incremental** diff between the previously-reviewed head sha
+	// and the current head sha, so a re-review after `git push` only
+	// looks at lines that changed since the last run — preventing the
+	// bot from re-commenting on unchanged code.
+	FetchDiffBetween(ctx context.Context, repoId RepoId, baseSha, headSha string) (UnifiedDiff, error)
 	FetchFileAt(ctx context.Context, repoId RepoId, sha, path string) (string, error)
 	ListChangedFiles(ctx context.Context, repoId RepoId, baseSha, headSha string) ([]ChangedFile, error)
 	ListPrComments(ctx context.Context, ref PrRef) ([]HumanComment, error)
