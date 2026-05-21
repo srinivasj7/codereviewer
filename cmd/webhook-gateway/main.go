@@ -361,6 +361,8 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 			Kind:              "reply",
 			CommentExternalId: p.InReplyToId,
 			AuthorId:          p.AuthorId,
+			Body:              p.Body,
+			PrNumber:          p.Ref.PrNumber,
 		})
 	}
 	return nil

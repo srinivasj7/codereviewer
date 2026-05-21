@@ -444,6 +444,21 @@ func (s *Source) PostReview(ctx context.Context, ref ports.PrRef, review ports.R
 	}, nil
 }
 
+// PostCommentReply threads a comment under an existing review comment
+// via go-github's CreateCommentInReplyTo. GitHub returns the newly-
+// created comment so we can persist its external id.
+func (s *Source) PostCommentReply(ctx context.Context, repoId ports.RepoId, prNumber int, parentCommentId int64, body string) (int64, error) {
+	owner, name, err := parseRepoId(repoId)
+	if err != nil {
+		return 0, err
+	}
+	c, _, err := s.client.PullRequests.CreateCommentInReplyTo(ctx, owner, name, prNumber, body, parentCommentId)
+	if err != nil {
+		return 0, fmt.Errorf("create comment in reply: %w", err)
+	}
+	return c.GetID(), nil
+}
+
 // UpdateCheck creates a completed check run for the head sha.
 func (s *Source) UpdateCheck(ctx context.Context, ref ports.PrRef, result ports.CheckResult) error {
 	owner, name, err := parseRepoId(ref.RepoId)

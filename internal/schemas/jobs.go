@@ -44,6 +44,12 @@ type FeedbackJob struct {
 	CommentExternalId int64          `json:"comment_external_id"`
 	Reaction          string         `json:"reaction,omitempty"`
 	AuthorId          string         `json:"author_id,omitempty"`
+	// Body and PrNumber are populated for kind="reply" so the
+	// conversation handler (slice 8) can decide whether to engage and
+	// has the parent PR available for cap counting + nested replies.
+	// Empty / zero for kind="reaction".
+	Body     string `json:"body,omitempty"`
+	PrNumber int    `json:"pr_number,omitempty"`
 }
 
 // IdempotencyKey for FeedbackJob: a given (kind, comment, reaction,
