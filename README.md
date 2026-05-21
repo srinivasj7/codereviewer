@@ -154,6 +154,49 @@ The system bounds its own growth and surfaces operational state for debugging:
 - **Recent runs viewer** — `/runs` in the admin UI shows the last 50 pipeline invocations (status, model, cost, error). One-click **retry** re-publishes the `ReviewJob` against the original head sha.
 - **Enable / disable repo** — `/repos` lets you toggle a repo. Disabling tombstones its `code_chunks` and `review_comments`; subsequent webhooks short-circuit silently. Re-enabling means the next default-branch push re-indexes from scratch.
 
+## Bitbucket Cloud (alternative to GitHub)
+
+The same review pipeline runs against Bitbucket Cloud by flipping `[vcs].provider = "bitbucket"`. One-time setup:
+
+1. **Create an OAuth consumer** in your Bitbucket workspace at  
+   `https://bitbucket.org/<workspace>/workspace/settings/api` →  *Add consumer*.
+   - Name: `codereviewer`
+   - Callback URL: any (unused by client-credentials grant; `http://localhost/unused` is fine)
+   - **This is a private consumer** → ✓ checked (lets it use client-credentials)
+   - Permissions: **Pull requests: Write**, **Repositories: Read**, **Webhooks: Read & Write**
+
+   On save, copy the **Key** and **Secret**.
+
+2. **Drop the secrets into `.env`:**
+   ```sh
+   BITBUCKET_CLIENT_ID=<key from step 1>
+   BITBUCKET_CLIENT_SECRET=<secret from step 1>
+   BITBUCKET_WORKSPACE=<your workspace slug>
+   GITHUB_WEBHOOK_SECRET=<a fresh `openssl rand -hex 32`>   # reused for Bitbucket HMAC
+   ```
+
+3. **Switch dev.toml:**
+   ```toml
+   [vcs]
+   provider                = "bitbucket"
+   bitbucket_client_id     = "${BITBUCKET_CLIENT_ID}"
+   bitbucket_client_secret = "${BITBUCKET_CLIENT_SECRET}"
+   bitbucket_workspace     = "${BITBUCKET_WORKSPACE}"
+   webhook_secret          = "${GITHUB_WEBHOOK_SECRET}"
+   ```
+
+4. **Register the repository webhook** in Bitbucket:  
+   Repo settings → *Webhooks* → *Add webhook*.
+   - URL: smee or ngrok URL fronting `http://127.0.0.1:8080/bitbucket/webhook`
+   - **Secret**: the same value as `GITHUB_WEBHOOK_SECRET` above
+   - Triggers: `Repository → Push`, `Pull request → Created`, `Pull request → Updated`, `Pull request → Comment created`
+
+5. `docker compose up -d --build --force-recreate webhook-gateway review-worker indexer-worker feedback-worker`.
+
+> Bitbucket has no batch "submit review" API: each inline comment is its own POST. The adapter keeps going on partial failures (one bad-line comment doesn't tank the rest) and surfaces survivors in `pr_runs.posted_review_id`. Bitbucket build statuses map as `success/neutral → SUCCESSFUL`, `failure → FAILED`, `timed_out → STOPPED`.
+
+> Only one provider is active per deployment in this slice. Multi-VCS routing (running both at once via a Registry abstraction) is Phase B.
+
 ## Production deploy (slice 5)
 
 ### Container images

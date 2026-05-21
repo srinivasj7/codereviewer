@@ -4,10 +4,15 @@
 
 [vcs]
 provider         = "github"
+# --- GitHub (when provider = "github") ---
 app_id           = "${GITHUB_APP_ID}"
 installation_id  = "${GITHUB_INSTALLATION_ID}"
 private_key_path = "/run/secrets/github-app-key.pem"
 webhook_secret   = "${GITHUB_WEBHOOK_SECRET}"
+# --- Bitbucket (when provider = "bitbucket") ---
+# bitbucket_client_id     = "${BITBUCKET_CLIENT_ID}"
+# bitbucket_client_secret = "${BITBUCKET_CLIENT_SECRET}"
+# bitbucket_workspace     = "${BITBUCKET_WORKSPACE}"
 
 [message_bus]
 type                = "nats"

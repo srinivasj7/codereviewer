@@ -86,14 +86,28 @@ type TenantConfig struct {
 	Name string `toml:"name"`
 }
 
-// VcsConfig configures the version-control adapter.
+// VcsConfig configures the version-control adapter. Provider selects
+// which subset of fields is required.
 type VcsConfig struct {
-	Provider       string `toml:"provider"` // github | memory
+	Provider string `toml:"provider"` // github | bitbucket | memory
+
+	// GitHub fields — required when Provider == "github".
 	AppId          string `toml:"app_id"`
 	InstallationId string `toml:"installation_id"`
 	PrivateKey     string `toml:"private_key"`      // inline PEM (use ${ENV} expansion)
 	PrivateKeyPath string `toml:"private_key_path"` // alternative to inline; preferred
 	WebhookSecret  string `toml:"webhook_secret"`
+
+	// Bitbucket fields — required when Provider == "bitbucket".
+	// ClientId / ClientSecret authenticate the OAuth 2.0 client-credentials
+	// grant against bitbucket.org/site/oauth2/access_token. Set
+	// BitbucketClientSecret via env (${BITBUCKET_CLIENT_SECRET}) — never
+	// commit it. Workspace is the workspace slug owning the deployment;
+	// BaseURL defaults to https://api.bitbucket.org/v2 when empty.
+	BitbucketClientId     string `toml:"bitbucket_client_id"`
+	BitbucketClientSecret string `toml:"bitbucket_client_secret"`
+	BitbucketWorkspace    string `toml:"bitbucket_workspace"`
+	BitbucketBaseURL      string `toml:"bitbucket_base_url"`
 }
 
 // MessageBusConfig configures the message bus adapter.
@@ -187,7 +201,7 @@ type LinearConfig struct {
 // are populated for the chosen provider. It does NOT verify external
 // reachability — that's the adapter's job at boot.
 func (c *Config) Validate() error {
-	if err := validateOneOf("vcs.provider", c.Vcs.Provider, "github", "memory"); err != nil {
+	if err := validateOneOf("vcs.provider", c.Vcs.Provider, "github", "bitbucket", "memory"); err != nil {
 		return err
 	}
 	if err := validateOneOf("message_bus.type", c.MessageBus.Type, "sqs", "nats", "memory"); err != nil {
