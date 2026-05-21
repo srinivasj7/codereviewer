@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,7 +63,12 @@ func (t *tokenSource) Token(ctx context.Context) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token exchange: status %d", resp.StatusCode)
+		// Bitbucket returns JSON like {"error":"invalid_client","error_description":"..."}.
+		// Surface up to 256 bytes so the operator can tell apart "private
+		// consumer not checked" (invalid_grant) from credential typos
+		// (invalid_client) from scope issues.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return "", fmt.Errorf("token exchange: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var out struct {
 		AccessToken string `json:"access_token"`

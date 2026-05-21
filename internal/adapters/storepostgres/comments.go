@@ -41,7 +41,7 @@ RETURNING comment_id::text
 `,
 		id, string(c.TenantId), string(c.RepoId), c.PrNumber, c.Source, c.GithubId,
 		c.FilePath, c.StartLine, c.EndLine, nullableText(c.DiffHunk), c.CommentText, nullableText(c.Category),
-		string(c.Outcome), string(c.OutcomeSignal), pgvector.NewVector(c.Embedding),
+		string(c.Outcome), string(c.OutcomeSignal), nullableVector(c.Embedding),
 	).Scan(&stored)
 	if err != nil {
 		return "", fmt.Errorf("upsert comment: %w", err)

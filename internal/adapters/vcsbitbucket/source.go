@@ -334,14 +334,19 @@ func (s *Source) UpdateCheck(ctx context.Context, ref ports.PrRef, result ports.
 		return err
 	}
 	state := mapConclusion(result.Conclusion)
+	// Bitbucket's build-status API requires `url` even when there's no
+	// per-run details page. Fall back to a stable per-repo URL so the
+	// API accepts the call.
+	detailsURL := result.DetailsURL
+	if detailsURL == "" {
+		detailsURL = fmt.Sprintf("https://bitbucket.org/%s/%s/commits/%s", ws, slug, ref.HeadSha)
+	}
 	body := map[string]any{
 		"state":       state,
 		"key":         result.Name,
 		"name":        result.Name,
 		"description": truncate(result.Summary, 140),
-	}
-	if result.DetailsURL != "" {
-		body["url"] = result.DetailsURL
+		"url":         detailsURL,
 	}
 	path := fmt.Sprintf("/repositories/%s/%s/commit/%s/statuses/build", ws, slug, ref.HeadSha)
 	status, err := s.api.postJSON(ctx, path, body, nil)
