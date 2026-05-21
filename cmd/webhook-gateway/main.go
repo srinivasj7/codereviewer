@@ -104,7 +104,12 @@ func run(cfgPath string) error {
 	}
 	webhookLimiter := newWebhookLimiter(cfg.RateLimit.WebhookPerSecond)
 	r.Get("/health", gw.health)
+	// Both routes call the same handler, which delegates to the
+	// configured Vcs.VerifyWebhook. Only one route will validate
+	// successfully per deployment (single-VCS swap; multi-VCS
+	// routing comes in slice 6 Phase B).
 	r.With(webhookLimiter).Post("/github/webhook", gw.webhook)
+	r.With(webhookLimiter).Post("/bitbucket/webhook", gw.webhook)
 
 	srv := &http.Server{
 		Addr:              cfg.Gateway.ListenAddr,

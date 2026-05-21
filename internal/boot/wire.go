@@ -16,6 +16,7 @@ import (
 	"codereviewer/internal/adapters/parsertreesitter"
 	"codereviewer/internal/adapters/secretsenv"
 	"codereviewer/internal/adapters/storepostgres"
+	"codereviewer/internal/adapters/vcsbitbucket"
 	"codereviewer/internal/adapters/vcsgithub"
 	"codereviewer/internal/ports"
 	"codereviewer/internal/ports/store"
@@ -106,6 +107,8 @@ func PickVcs(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsSource, e
 	switch cfg.Provider {
 	case "github":
 		return vcsgithub.New(cfg)
+	case "bitbucket":
+		return vcsbitbucket.New(cfg)
 	case "memory":
 		return nil, fmt.Errorf("the memory vcs lives in internal/testing/fakes; use the harness for tests")
 	}
