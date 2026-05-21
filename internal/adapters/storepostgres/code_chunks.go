@@ -141,3 +141,14 @@ func nullableText(s string) any {
 	}
 	return s
 }
+
+// nullableVector turns an empty embedding into a SQL NULL so pgvector
+// doesn't reject a 0-dim vector. Bot-comment persistence runs before
+// any batch-embedding step today, so we may write rows without an
+// embedding and backfill later.
+func nullableVector(v []float32) any {
+	if len(v) == 0 {
+		return nil
+	}
+	return pgvector.NewVector(v)
+}
