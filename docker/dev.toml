@@ -120,7 +120,7 @@ webhook_max_body_bytes  = 1048576
 # and the feedback-worker will run a focused LLM call when a human
 # reply matches a trigger. Hard cap per PR prevents LLM loops.
 [conversation]
-enabled              = false
+enabled              = true
 max_replies_per_pr   = 2
 trigger_suffixes     = ["?"]
 trigger_prefixes     = ["/explain"]
