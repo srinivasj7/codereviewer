@@ -27,6 +27,8 @@ func main() {
 	repoFlag := flag.String("repo", "", "repository as owner/name (required)")
 	windowDays := flag.Int("window-days", 270, "history window in days (default: 9 months)")
 	tenantOverride := flag.String("tenant-id", "", "override the configured tenant id")
+	providerFlag := flag.String("provider", string(ports.VcsProviderGitHub),
+		"VCS provider for the repo (github | bitbucket)")
 	flag.Parse()
 
 	if *repoFlag == "" {
@@ -35,13 +37,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*cfgPath, *repoFlag, *windowDays, *tenantOverride); err != nil {
+	if err := run(*cfgPath, *repoFlag, *windowDays, *tenantOverride, *providerFlag); err != nil {
 		fmt.Fprintln(os.Stderr, "backfill-cli:", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfgPath, repo string, windowDays int, tenantOverride string) error {
+func run(cfgPath, repo string, windowDays int, tenantOverride, provider string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -76,9 +78,13 @@ func run(cfgPath, repo string, windowDays int, tenantOverride string) error {
 	obs, shutdownObs := boot.PickObservability(ctx, cfg.Observability)
 	defer flushObs(shutdownObs)
 
-	vcs, err := boot.PickVcs(cfg.Vcs, secrets)
+	registry, err := boot.PickVcsRegistry(cfg.Vcs, secrets)
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
+	}
+	vcs, err := registry.For(ports.VcsProvider(provider))
+	if err != nil {
+		return fmt.Errorf("vcs provider %q not configured: %w", provider, err)
 	}
 	llm, err := boot.PickLlm(cfg.Llm, secrets, obs, llmlitellm.ModelURLs{})
 	if err != nil {
@@ -94,6 +100,7 @@ func run(cfgPath, repo string, windowDays int, tenantOverride string) error {
 			RepoId:   ports.RepoId(repo),
 			Owner:    splitOwner(repo),
 			Name:     splitName(repo),
+			Provider: ports.VcsProvider(provider),
 		})
 	}
 

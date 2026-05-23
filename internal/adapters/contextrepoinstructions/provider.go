@@ -27,14 +27,15 @@ const repoFile = ".codereviewer.md"
 
 // Provider is the ContextProvider implementation.
 type Provider struct {
-	vcs   ports.VcsSource
+	vcs   ports.VcsRegistry
 	store store.ContextStore
 	obs   ports.Obs
 }
 
-// New returns a Provider that pulls from the supplied VcsSource and
-// ContextStore.
-func New(vcs ports.VcsSource, store store.ContextStore, obs ports.Obs) *Provider {
+// New returns a Provider that pulls from the supplied VcsRegistry and
+// ContextStore. The registry is resolved per-ref so a single Provider
+// instance serves PRs from any registered VCS.
+func New(vcs ports.VcsRegistry, store store.ContextStore, obs ports.Obs) *Provider {
 	return &Provider{vcs: vcs, store: store, obs: obs}
 }
 
@@ -77,7 +78,11 @@ func (p *Provider) fetchFile(ctx context.Context, ref ports.PrRef) string {
 	if p.vcs == nil {
 		return ""
 	}
-	content, err := p.vcs.FetchFileAt(ctx, ref.RepoId, ref.HeadSha, repoFile)
+	vcs, err := p.vcs.For(ref.ProviderOrDefault())
+	if err != nil {
+		return ""
+	}
+	content, err := vcs.FetchFileAt(ctx, ref.RepoId, ref.HeadSha, repoFile)
 	if err != nil {
 		return ""
 	}

@@ -26,14 +26,14 @@ import (
 type Provider struct {
 	apiKey   string
 	prefixes []string // upper-case team prefixes; empty = accept all
-	vcs      ports.VcsSource
+	vcs      ports.VcsRegistry
 	http     *http.Client
 	obs      ports.Obs
 }
 
 // New constructs a Provider. teamPrefixes may be nil/empty to accept
-// any JIRA-style key.
-func New(apiKey string, teamPrefixes []string, vcs ports.VcsSource, obs ports.Obs) *Provider {
+// any JIRA-style key. The registry is resolved per-ref inside Fetch.
+func New(apiKey string, teamPrefixes []string, vcs ports.VcsRegistry, obs ports.Obs) *Provider {
 	up := make([]string, len(teamPrefixes))
 	for i, p := range teamPrefixes {
 		up[i] = strings.ToUpper(strings.TrimSpace(p))
@@ -52,7 +52,13 @@ func (p *Provider) Name() string { return "linear" }
 
 // Fetch implements ports.ContextProvider.
 func (p *Provider) Fetch(ctx context.Context, ref ports.PrRef) ([]ports.ContextItem, error) {
-	meta, err := p.vcs.FetchPrMeta(ctx, ref)
+	vcs, err := p.vcs.For(ref.ProviderOrDefault())
+	if err != nil {
+		p.obs.Logger.Warn("linear: vcs registry lookup failed",
+			"provider", string(ref.ProviderOrDefault()), "err", err.Error())
+		return nil, nil
+	}
+	meta, err := vcs.FetchPrMeta(ctx, ref)
 	if err != nil {
 		p.obs.Logger.Warn("linear: pr meta failed", "err", err.Error())
 		return nil, nil

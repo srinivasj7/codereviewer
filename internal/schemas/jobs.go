@@ -21,11 +21,12 @@ func (j ReviewJob) IdempotencyKey() string {
 
 // IndexJob triggers one indexer run for a default-branch push.
 type IndexJob struct {
-	TenantId  ports.TenantId `json:"tenant_id"`
-	RepoId    ports.RepoId   `json:"repo_id"`
-	Ref       string         `json:"ref"`
-	BeforeSha string         `json:"before_sha"`
-	HeadSha   string         `json:"head_sha"`
+	TenantId  ports.TenantId   `json:"tenant_id"`
+	RepoId    ports.RepoId     `json:"repo_id"`
+	Provider  ports.VcsProvider `json:"provider,omitempty"`
+	Ref       string           `json:"ref"`
+	BeforeSha string           `json:"before_sha"`
+	HeadSha   string           `json:"head_sha"`
 }
 
 // IdempotencyKey for IndexJob.
@@ -38,9 +39,10 @@ func (j IndexJob) IdempotencyKey() string {
 // AuthorId set. CommentExternalId is the GitHub id of the bot comment
 // that received the signal (used to look up our internal row).
 type FeedbackJob struct {
-	TenantId          ports.TenantId `json:"tenant_id"`
-	RepoId            ports.RepoId   `json:"repo_id"`
-	Kind              string         `json:"kind"`
+	TenantId          ports.TenantId    `json:"tenant_id"`
+	RepoId            ports.RepoId      `json:"repo_id"`
+	Provider          ports.VcsProvider `json:"provider,omitempty"`
+	Kind              string            `json:"kind"`
 	CommentExternalId int64          `json:"comment_external_id"`
 	Reaction          string         `json:"reaction,omitempty"`
 	AuthorId          string         `json:"author_id,omitempty"`

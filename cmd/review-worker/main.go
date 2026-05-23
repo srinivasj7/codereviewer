@@ -79,7 +79,7 @@ func run(cfgPath string) error {
 		return fmt.Errorf("bus: %w", err)
 	}
 
-	vcs, err := boot.PickVcs(cfg.Vcs, secrets)
+	vcs, err := boot.PickVcsRegistry(cfg.Vcs, secrets)
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
 	}
@@ -138,7 +138,7 @@ func flushObs(shutdown func(context.Context) error) {
 // adapter isn't vcsgithub.Source, the provider is skipped.
 func pickContextProviders(
 	cfg *schemas.Config,
-	vcs ports.VcsSource,
+	vcs ports.VcsRegistry,
 	ctxStore store.ContextStore,
 	obs ports.Obs,
 ) []ports.ContextProvider {
@@ -152,10 +152,17 @@ func pickContextProviders(
 				cfg.Context.Jira.APIToken, vcs, obs))
 	}
 	if cfg.Context.GithubIssues.Enabled {
-		if gh, ok := vcs.(*vcsgithub.Source); ok {
-			providers = append(providers, contextgithubissues.New(gh.Client(), vcs, obs))
-		} else {
-			obs.Logger.Warn("github-issues context provider enabled but VcsSource is not vcsgithub; skipping")
+		ghSrc, err := vcs.For(ports.VcsProviderGitHub)
+		switch {
+		case err != nil:
+			obs.Logger.Warn("github-issues enabled but no github adapter registered; skipping",
+				"err", err.Error())
+		default:
+			if gh, ok := ghSrc.(*vcsgithub.Source); ok {
+				providers = append(providers, contextgithubissues.New(gh.Client(), vcs, obs))
+			} else {
+				obs.Logger.Warn("github-issues enabled but registered github adapter is not vcsgithub; skipping")
+			}
 		}
 	}
 	if cfg.Context.Linear.APIKey != "" {

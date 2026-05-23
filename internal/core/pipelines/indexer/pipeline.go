@@ -18,7 +18,7 @@ import (
 
 // Deps holds the indexer pipeline's collaborators.
 type Deps struct {
-	Vcs            ports.VcsSource
+	Vcs            ports.VcsRegistry
 	Llm            ports.LlmGateway
 	Parser         ports.ParserRegistry
 	Obs            ports.Obs
@@ -56,12 +56,20 @@ func (p *Pipeline) Handle(ctx context.Context, payload []byte, cctx ports.Consum
 }
 
 func (p *Pipeline) process(ctx context.Context, job schemas.IndexJob) error {
-	files, err := p.deps.Vcs.ListChangedFiles(ctx, job.RepoId, job.BeforeSha, job.HeadSha)
+	provider := job.Provider
+	if provider == "" {
+		provider = ports.VcsProviderGitHub
+	}
+	vcs, err := p.deps.Vcs.For(provider)
+	if err != nil {
+		return fmt.Errorf("vcs registry: %w", err)
+	}
+	files, err := vcs.ListChangedFiles(ctx, job.RepoId, job.BeforeSha, job.HeadSha)
 	if err != nil {
 		return fmt.Errorf("list changed files: %w", err)
 	}
 
-	chunksByHash, scannedFiles := p.collectChunks(ctx, job, files)
+	chunksByHash, scannedFiles := p.collectChunks(ctx, vcs, job, files)
 	if len(chunksByHash) == 0 {
 		p.deps.Obs.Logger.Info("indexer: no chunks to upsert",
 			"repo_id", string(job.RepoId),
@@ -128,7 +136,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.IndexJob) error {
 	return nil
 }
 
-func (p *Pipeline) collectChunks(ctx context.Context, job schemas.IndexJob, files []ports.ChangedFile) (map[string][]store.CodeChunkUpsert, int) {
+func (p *Pipeline) collectChunks(ctx context.Context, vcs ports.VcsSource, job schemas.IndexJob, files []ports.ChangedFile) (map[string][]store.CodeChunkUpsert, int) {
 	chunksByHash := make(map[string][]store.CodeChunkUpsert)
 	scanned := 0
 	for _, f := range files {
@@ -139,7 +147,7 @@ func (p *Pipeline) collectChunks(ctx context.Context, job schemas.IndexJob, file
 			// Slice 4 enhancement: soft-delete chunks for removed files.
 			continue
 		}
-		content, err := p.deps.Vcs.FetchFileAt(ctx, job.RepoId, job.HeadSha, f.Path)
+		content, err := vcs.FetchFileAt(ctx, job.RepoId, job.HeadSha, f.Path)
 		if err != nil {
 			p.deps.Obs.Logger.Warn("indexer: fetch file failed",
 				"path", f.Path, "err", err.Error())

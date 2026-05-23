@@ -103,28 +103,51 @@ type TenantConfig struct {
 	Name string `toml:"name"`
 }
 
-// VcsConfig configures the version-control adapter. Provider selects
-// which subset of fields is required.
+// VcsConfig configures the version-control adapter(s).
+//
+// Single-provider deploys set `provider`. Multi-provider deploys
+// (slice 6B) set `providers = ["github", "bitbucket"]` and populate
+// both sides of the field set. Webhook gateway exposes one route per
+// configured provider; pipelines route per-job via the registry.
 type VcsConfig struct {
+	// Provider — single-provider shortcut. When Providers is empty,
+	// the loaded value here is the sole registered adapter (back-compat
+	// with slices 0-6A configs).
 	Provider string `toml:"provider"` // github | bitbucket | memory
+	// Providers — multi-provider list. When non-empty, all listed
+	// adapters are constructed and registered. Provider is ignored.
+	Providers []string `toml:"providers"`
 
-	// GitHub fields — required when Provider == "github".
+	// GitHub fields — required when "github" is among the active providers.
 	AppId          string `toml:"app_id"`
 	InstallationId string `toml:"installation_id"`
 	PrivateKey     string `toml:"private_key"`      // inline PEM (use ${ENV} expansion)
 	PrivateKeyPath string `toml:"private_key_path"` // alternative to inline; preferred
 	WebhookSecret  string `toml:"webhook_secret"`
 
-	// Bitbucket fields — required when Provider == "bitbucket".
-	// ClientId / ClientSecret authenticate the OAuth 2.0 client-credentials
-	// grant against bitbucket.org/site/oauth2/access_token. Set
-	// BitbucketClientSecret via env (${BITBUCKET_CLIENT_SECRET}) — never
-	// commit it. Workspace is the workspace slug owning the deployment;
-	// BaseURL defaults to https://api.bitbucket.org/v2 when empty.
+	// Bitbucket fields — required when "bitbucket" is among the active
+	// providers. ClientId / ClientSecret authenticate the OAuth 2.0
+	// client-credentials grant. WebhookSecret is shared with the GitHub
+	// adapter; configure both webhooks (GH + BB) with the same value.
+	// BaseURL defaults to https://api.bitbucket.org/2.0 when empty.
 	BitbucketClientId     string `toml:"bitbucket_client_id"`
 	BitbucketClientSecret string `toml:"bitbucket_client_secret"`
 	BitbucketWorkspace    string `toml:"bitbucket_workspace"`
 	BitbucketBaseURL      string `toml:"bitbucket_base_url"`
+}
+
+// ActiveProviders returns the list of provider keys this deployment
+// should construct adapters for. When Providers is non-empty, that
+// wins; otherwise Provider is the single-entry fallback. Empty/unset
+// returns an empty slice (validated upstream).
+func (v VcsConfig) ActiveProviders() []string {
+	if len(v.Providers) > 0 {
+		return v.Providers
+	}
+	if v.Provider != "" {
+		return []string{v.Provider}
+	}
+	return nil
 }
 
 // MessageBusConfig configures the message bus adapter.
@@ -218,8 +241,14 @@ type LinearConfig struct {
 // are populated for the chosen provider. It does NOT verify external
 // reachability — that's the adapter's job at boot.
 func (c *Config) Validate() error {
-	if err := validateOneOf("vcs.provider", c.Vcs.Provider, "github", "bitbucket", "memory"); err != nil {
-		return err
+	active := c.Vcs.ActiveProviders()
+	if len(active) == 0 {
+		return fmt.Errorf("config: vcs.provider or vcs.providers must be set")
+	}
+	for _, p := range active {
+		if err := validateOneOf("vcs.providers[]", p, "github", "bitbucket", "memory"); err != nil {
+			return err
+		}
 	}
 	if err := validateOneOf("message_bus.type", c.MessageBus.Type, "sqs", "nats", "memory"); err != nil {
 		return err

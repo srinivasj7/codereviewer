@@ -102,9 +102,11 @@ func PickClock() ports.Clock {
 	return clocksystem.New()
 }
 
-// PickVcs selects a VcsSource.
-func PickVcs(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsSource, error) {
-	switch cfg.Provider {
+// PickVcs constructs a single VcsSource for `provider`. Kept as a
+// thin helper for callers (CLIs, tests) that want one specific
+// adapter without a registry.
+func PickVcs(provider string, cfg schemas.VcsConfig) (ports.VcsSource, error) {
+	switch provider {
 	case "github":
 		return vcsgithub.New(cfg)
 	case "bitbucket":
@@ -112,7 +114,26 @@ func PickVcs(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsSource, e
 	case "memory":
 		return nil, fmt.Errorf("the memory vcs lives in internal/testing/fakes; use the harness for tests")
 	}
-	return nil, fmt.Errorf("unknown vcs.provider: %q", cfg.Provider)
+	return nil, fmt.Errorf("unknown vcs provider: %q", provider)
+}
+
+// PickVcsRegistry returns a registry containing every adapter listed
+// in cfg.Vcs.ActiveProviders. Pipelines call registry.For(ref.Provider)
+// to resolve the right adapter per job.
+func PickVcsRegistry(cfg schemas.VcsConfig, _ ports.SecretsProvider) (ports.VcsRegistry, error) {
+	active := cfg.ActiveProviders()
+	if len(active) == 0 {
+		return nil, fmt.Errorf("no vcs provider configured (set [vcs].provider or [vcs].providers)")
+	}
+	sources := make(map[ports.VcsProvider]ports.VcsSource, len(active))
+	for _, p := range active {
+		src, err := PickVcs(p, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("vcs provider %q: %w", p, err)
+		}
+		sources[ports.VcsProvider(p)] = src
+	}
+	return &ports.MapVcsRegistry{Sources: sources}, nil
 }
 
 // PickLlm selects an LlmGateway. Pass non-nil closures on `models` to

@@ -25,14 +25,15 @@ import (
 type Provider struct {
 	baseURL    string
 	authHeader string
-	vcs        ports.VcsSource
+	vcs        ports.VcsRegistry
 	http       *http.Client
 	obs        ports.Obs
 }
 
 // New constructs a Provider. baseURL is the JIRA site (e.g.
-// https://acme.atlassian.net). vcs is used only to fetch PR meta.
-func New(baseURL, email, apiToken string, vcs ports.VcsSource, obs ports.Obs) *Provider {
+// https://acme.atlassian.net). vcs is used only to fetch PR meta; the
+// registry is resolved per-ref so the provider works across VCSes.
+func New(baseURL, email, apiToken string, vcs ports.VcsRegistry, obs ports.Obs) *Provider {
 	creds := base64.StdEncoding.EncodeToString([]byte(email + ":" + apiToken))
 	return &Provider{
 		baseURL:    strings.TrimRight(baseURL, "/"),
@@ -48,7 +49,13 @@ func (p *Provider) Name() string { return "jira" }
 
 // Fetch implements ports.ContextProvider.
 func (p *Provider) Fetch(ctx context.Context, ref ports.PrRef) ([]ports.ContextItem, error) {
-	meta, err := p.vcs.FetchPrMeta(ctx, ref)
+	vcs, err := p.vcs.For(ref.ProviderOrDefault())
+	if err != nil {
+		p.obs.Logger.Warn("jira: vcs registry lookup failed",
+			"provider", string(ref.ProviderOrDefault()), "err", err.Error())
+		return nil, nil
+	}
+	meta, err := vcs.FetchPrMeta(ctx, ref)
 	if err != nil {
 		p.obs.Logger.Warn("jira: pr meta failed", "err", err.Error())
 		return nil, nil
