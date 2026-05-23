@@ -3,6 +3,8 @@ package schemas
 import (
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestVcsConfig_ActiveProviders(t *testing.T) {
@@ -95,5 +97,73 @@ func TestConfig_Validate_RejectsUnknownInMultiProvider(t *testing.T) {
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error when one provider in the list is unknown")
+	}
+}
+
+// TestVcsConfig_TOMLParse_NestedBlocks pins the wire format for the
+// per-provider config blocks. Regressions here would silently route
+// both adapters back to a shared webhook_secret — the exact bug the
+// nested layout was introduced to prevent.
+func TestVcsConfig_TOMLParse_NestedBlocks(t *testing.T) {
+	src := `
+providers = ["github", "bitbucket"]
+
+[github]
+app_id           = "12345"
+installation_id  = "67890"
+private_key_path = "/etc/key.pem"
+webhook_secret   = "gh-secret"
+
+[bitbucket]
+client_id      = "bb-client"
+client_secret  = "bb-secret"
+workspace      = "acme"
+webhook_secret = "bb-webhook-secret"
+`
+	var v VcsConfig
+	if err := toml.Unmarshal([]byte(src), &v); err != nil {
+		t.Fatalf("toml unmarshal: %v", err)
+	}
+
+	if got, want := v.GitHub.AppId, "12345"; got != want {
+		t.Errorf("GitHub.AppId: got %q, want %q", got, want)
+	}
+	if got, want := v.GitHub.WebhookSecret, "gh-secret"; got != want {
+		t.Errorf("GitHub.WebhookSecret: got %q, want %q", got, want)
+	}
+	if got, want := v.Bitbucket.ClientId, "bb-client"; got != want {
+		t.Errorf("Bitbucket.ClientId: got %q, want %q", got, want)
+	}
+	if got, want := v.Bitbucket.WebhookSecret, "bb-webhook-secret"; got != want {
+		t.Errorf("Bitbucket.WebhookSecret: got %q, want %q", got, want)
+	}
+	// The shared field is gone — the github and bitbucket secrets must
+	// not be the same value if both blocks set distinct strings.
+	if v.GitHub.WebhookSecret == v.Bitbucket.WebhookSecret {
+		t.Errorf("per-provider webhook secrets must round-trip distinctly")
+	}
+}
+
+// TestVcsConfig_TOMLParse_SingleProvider — a github-only deploy should
+// only need [vcs.github]. The bitbucket block stays zero-valued.
+func TestVcsConfig_TOMLParse_SingleProvider(t *testing.T) {
+	src := `
+provider = "github"
+
+[github]
+app_id          = "1"
+installation_id = "2"
+private_key     = "PEM"
+webhook_secret  = "only-github"
+`
+	var v VcsConfig
+	if err := toml.Unmarshal([]byte(src), &v); err != nil {
+		t.Fatalf("toml unmarshal: %v", err)
+	}
+	if v.GitHub.WebhookSecret != "only-github" {
+		t.Errorf("GitHub webhook_secret missing: got %q", v.GitHub.WebhookSecret)
+	}
+	if v.Bitbucket != (BitbucketVcsConfig{}) {
+		t.Errorf("expected zero-value Bitbucket block, got %+v", v.Bitbucket)
 	}
 }
