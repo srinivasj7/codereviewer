@@ -35,22 +35,22 @@ type Source struct {
 }
 
 // New constructs a Source.
-func New(cfg schemas.VcsConfig) (*Source, error) {
-	if cfg.BitbucketClientId == "" {
-		return nil, fmt.Errorf("vcsbitbucket: bitbucket_client_id is required")
+func New(cfg schemas.BitbucketVcsConfig) (*Source, error) {
+	if cfg.ClientId == "" {
+		return nil, fmt.Errorf("vcsbitbucket: client_id is required")
 	}
-	if cfg.BitbucketClientSecret == "" {
-		return nil, fmt.Errorf("vcsbitbucket: bitbucket_client_secret is required")
+	if cfg.ClientSecret == "" {
+		return nil, fmt.Errorf("vcsbitbucket: client_secret is required")
 	}
 	if cfg.WebhookSecret == "" {
 		return nil, fmt.Errorf("vcsbitbucket: webhook_secret is required")
 	}
-	baseURL := cfg.BitbucketBaseURL
+	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 	hc := &http.Client{Timeout: 30 * time.Second}
-	tokens := newTokenSource(cfg.BitbucketClientId, cfg.BitbucketClientSecret, hc)
+	tokens := newTokenSource(cfg.ClientId, cfg.ClientSecret, hc)
 	return &Source{
 		api:           newAPIClient(baseURL, tokens, hc),
 		webhookSecret: []byte(cfg.WebhookSecret),

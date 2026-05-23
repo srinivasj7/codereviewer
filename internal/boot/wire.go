@@ -108,9 +108,9 @@ func PickClock() ports.Clock {
 func PickVcs(provider string, cfg schemas.VcsConfig) (ports.VcsSource, error) {
 	switch provider {
 	case "github":
-		return vcsgithub.New(cfg)
+		return vcsgithub.New(cfg.GitHub)
 	case "bitbucket":
-		return vcsbitbucket.New(cfg)
+		return vcsbitbucket.New(cfg.Bitbucket)
 	case "memory":
 		return nil, fmt.Errorf("the memory vcs lives in internal/testing/fakes; use the harness for tests")
 	}

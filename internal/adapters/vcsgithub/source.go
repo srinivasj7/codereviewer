@@ -35,9 +35,8 @@ type Source struct {
 }
 
 // New constructs a Source. Either PrivateKey (inline PEM) or
-// PrivateKeyPath must be set. InstallationId is the GitHub App
-// installation id; multi-installation support is deferred to slice 2.
-func New(cfg schemas.VcsConfig) (*Source, error) {
+// PrivateKeyPath must be set.
+func New(cfg schemas.GitHubVcsConfig) (*Source, error) {
 	if cfg.AppId == "" {
 		return nil, fmt.Errorf("vcsgithub: app_id is required")
 	}
@@ -82,7 +81,7 @@ func New(cfg schemas.VcsConfig) (*Source, error) {
 // transport without re-wiring credentials.
 func (s *Source) Client() *github.Client { return s.client }
 
-func loadPrivateKey(cfg schemas.VcsConfig) ([]byte, error) {
+func loadPrivateKey(cfg schemas.GitHubVcsConfig) ([]byte, error) {
 	if cfg.PrivateKeyPath != "" {
 		b, err := os.ReadFile(cfg.PrivateKeyPath)
 		if err != nil {

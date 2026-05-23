@@ -105,35 +105,44 @@ type TenantConfig struct {
 
 // VcsConfig configures the version-control adapter(s).
 //
-// Single-provider deploys set `provider`. Multi-provider deploys
-// (slice 6B) set `providers = ["github", "bitbucket"]` and populate
-// both sides of the field set. Webhook gateway exposes one route per
-// configured provider; pipelines route per-job via the registry.
+// Single-provider deploys set `provider`. Multi-provider deploys set
+// `providers = ["github", "bitbucket"]` and populate both nested blocks.
+// Each provider owns its own `webhook_secret` so multi-VCS deployments
+// can register distinct secrets with each VCS without re-using one
+// across both webhook endpoints.
 type VcsConfig struct {
 	// Provider — single-provider shortcut. When Providers is empty,
-	// the loaded value here is the sole registered adapter (back-compat
-	// with slices 0-6A configs).
+	// the loaded value here is the sole registered adapter.
 	Provider string `toml:"provider"` // github | bitbucket | memory
 	// Providers — multi-provider list. When non-empty, all listed
 	// adapters are constructed and registered. Provider is ignored.
 	Providers []string `toml:"providers"`
 
-	// GitHub fields — required when "github" is among the active providers.
+	// GitHub — required when "github" is among the active providers.
+	GitHub GitHubVcsConfig `toml:"github"`
+	// Bitbucket — required when "bitbucket" is among the active providers.
+	Bitbucket BitbucketVcsConfig `toml:"bitbucket"`
+}
+
+// GitHubVcsConfig — auth + webhook config for the GitHub App adapter.
+type GitHubVcsConfig struct {
 	AppId          string `toml:"app_id"`
 	InstallationId string `toml:"installation_id"`
 	PrivateKey     string `toml:"private_key"`      // inline PEM (use ${ENV} expansion)
 	PrivateKeyPath string `toml:"private_key_path"` // alternative to inline; preferred
 	WebhookSecret  string `toml:"webhook_secret"`
+}
 
-	// Bitbucket fields — required when "bitbucket" is among the active
-	// providers. ClientId / ClientSecret authenticate the OAuth 2.0
-	// client-credentials grant. WebhookSecret is shared with the GitHub
-	// adapter; configure both webhooks (GH + BB) with the same value.
-	// BaseURL defaults to https://api.bitbucket.org/2.0 when empty.
-	BitbucketClientId     string `toml:"bitbucket_client_id"`
-	BitbucketClientSecret string `toml:"bitbucket_client_secret"`
-	BitbucketWorkspace    string `toml:"bitbucket_workspace"`
-	BitbucketBaseURL      string `toml:"bitbucket_base_url"`
+// BitbucketVcsConfig — OAuth + webhook config for the Bitbucket Cloud
+// adapter. ClientId / ClientSecret authenticate the OAuth 2.0
+// client-credentials grant against a workspace-level OAuth consumer.
+// BaseURL defaults to https://api.bitbucket.org/2.0 when empty.
+type BitbucketVcsConfig struct {
+	ClientId      string `toml:"client_id"`
+	ClientSecret  string `toml:"client_secret"`
+	Workspace     string `toml:"workspace"`
+	BaseURL       string `toml:"base_url"`
+	WebhookSecret string `toml:"webhook_secret"`
 }
 
 // ActiveProviders returns the list of provider keys this deployment
