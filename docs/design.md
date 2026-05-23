@@ -324,10 +324,23 @@ Single TOML file per deployment, plus secrets injected as env vars. Slots are fi
 
 ```toml
 [vcs]
-provider       = "github"
-app_id         = "${GITHUB_APP_ID}"
-private_key    = "${GITHUB_APP_PRIVATE_KEY}"
-webhook_secret = "${GITHUB_WEBHOOK_SECRET}"
+# Single-provider deploys set `provider`; multi-VCS deploys set
+# `providers = ["github", "bitbucket"]` instead and populate both
+# nested blocks. Each provider owns its own webhook_secret so the
+# GitHub and Bitbucket webhook endpoints register distinct secrets.
+provider = "github"
+
+[vcs.github]
+app_id           = "${GITHUB_APP_ID}"
+installation_id  = "${GITHUB_INSTALLATION_ID}"
+private_key_path = "/run/secrets/github-app-key.pem"  # or `private_key = "${PEM}"`
+webhook_secret   = "${GITHUB_WEBHOOK_SECRET}"
+
+[vcs.bitbucket]
+client_id      = "${BITBUCKET_CLIENT_ID}"
+client_secret  = "${BITBUCKET_CLIENT_SECRET}"
+workspace      = "${BITBUCKET_WORKSPACE}"
+webhook_secret = "${BITBUCKET_WEBHOOK_SECRET}"
 
 [message_bus]
 type              = "sqs"                    # sqs | kafka | nats | redis-streams
