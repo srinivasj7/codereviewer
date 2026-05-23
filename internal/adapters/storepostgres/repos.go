@@ -32,13 +32,20 @@ ON CONFLICT (tenant_id) DO NOTHING
 		return fmt.Errorf("ensure tenant: %w", err)
 	}
 
+	// Provider is the VCS adapter that owns the repo. Empty (which
+	// happens for refs constructed before slice 6B's RepoRef.Provider
+	// field existed, or for in-memory fakes) maps to the schema's
+	// default of 'github' via the COALESCE — the CHECK constraint on
+	// repos.provider rejects anything else.
+	provider := string(repo.Provider)
 	if _, err := tx.Exec(ctx, `
-INSERT INTO repos (repo_id, tenant_id, owner, name, default_branch)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO repos (repo_id, tenant_id, owner, name, default_branch, provider)
+VALUES ($1, $2, $3, $4, $5, COALESCE(NULLIF($6, ''), 'github'))
 ON CONFLICT (owner, name) DO UPDATE SET
   default_branch = EXCLUDED.default_branch,
-  tenant_id      = EXCLUDED.tenant_id
-`, string(repo.RepoId), string(repo.TenantId), repo.Owner, repo.Name, repo.DefaultBranch); err != nil {
+  tenant_id      = EXCLUDED.tenant_id,
+  provider       = EXCLUDED.provider
+`, string(repo.RepoId), string(repo.TenantId), repo.Owner, repo.Name, repo.DefaultBranch, provider); err != nil {
 		return fmt.Errorf("ensure repo: %w", err)
 	}
 
@@ -49,11 +56,12 @@ ON CONFLICT (owner, name) DO UPDATE SET
 func (s *RepoStore) Get(ctx context.Context, repoId ports.RepoId) (ports.RepoRef, bool, error) {
 	var ref ports.RepoRef
 	var defaultBranch *string
+	var provider string
 	err := s.pool.QueryRow(ctx, `
-SELECT tenant_id, owner, name, default_branch, COALESCE(enabled, true)
+SELECT tenant_id, owner, name, default_branch, COALESCE(enabled, true), provider
 FROM repos
 WHERE repo_id = $1
-`, string(repoId)).Scan((*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled)
+`, string(repoId)).Scan((*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled, &provider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ports.RepoRef{}, false, nil
 	}
@@ -64,13 +72,14 @@ WHERE repo_id = $1
 	if defaultBranch != nil {
 		ref.DefaultBranch = *defaultBranch
 	}
+	ref.Provider = ports.VcsProvider(provider)
 	return ref, true, nil
 }
 
 // ListByTenant returns all repos for a tenant.
 func (s *RepoStore) ListByTenant(ctx context.Context, tenant ports.TenantId) ([]ports.RepoRef, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT repo_id, tenant_id, owner, name, default_branch, COALESCE(enabled, true)
+SELECT repo_id, tenant_id, owner, name, default_branch, COALESCE(enabled, true), provider
 FROM repos WHERE tenant_id = $1
 ORDER BY repo_id
 `, string(tenant))
@@ -82,12 +91,14 @@ ORDER BY repo_id
 	for rows.Next() {
 		var ref ports.RepoRef
 		var defaultBranch *string
-		if err := rows.Scan(&ref.RepoId, (*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled); err != nil {
+		var provider string
+		if err := rows.Scan(&ref.RepoId, (*string)(&ref.TenantId), &ref.Owner, &ref.Name, &defaultBranch, &ref.Enabled, &provider); err != nil {
 			return nil, fmt.Errorf("scan repo: %w", err)
 		}
 		if defaultBranch != nil {
 			ref.DefaultBranch = *defaultBranch
 		}
+		ref.Provider = ports.VcsProvider(provider)
 		out = append(out, ref)
 	}
 	return out, rows.Err()

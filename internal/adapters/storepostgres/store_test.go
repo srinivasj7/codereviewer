@@ -124,6 +124,48 @@ func TestRepoStore_EnsureExists_Idempotent(t *testing.T) {
 	assert.Equal(t, "trunk", got.DefaultBranch)
 }
 
+func TestRepoStore_Provider_RoundTrips(t *testing.T) {
+	s := requireDB(t)
+
+	// A repo written before slice 6B (no Provider set) reads back as
+	// "github" because migration 008's DEFAULT clause + the
+	// EnsureExists NULLIF('','github') guard converge there.
+	pre6B := ports.RepoRef{
+		TenantId: "tenant-a", RepoId: "legacy/repo",
+		Owner: "legacy", Name: "repo", DefaultBranch: "main",
+	}
+	require.NoError(t, s.Repos.EnsureExists(testCtx, pre6B))
+	got, _, err := s.Repos.Get(testCtx, pre6B.RepoId)
+	require.NoError(t, err)
+	assert.Equal(t, ports.VcsProviderGitHub, got.Provider, "empty Provider must default to github")
+
+	// A bitbucket repo round-trips and stays bitbucket across
+	// subsequent EnsureExists calls.
+	bb := ports.RepoRef{
+		TenantId: "tenant-a", RepoId: "bbteam/svc",
+		Owner: "bbteam", Name: "svc", DefaultBranch: "main",
+		Provider: ports.VcsProviderBitbucket,
+	}
+	require.NoError(t, s.Repos.EnsureExists(testCtx, bb))
+	got, _, err = s.Repos.Get(testCtx, bb.RepoId)
+	require.NoError(t, err)
+	assert.Equal(t, ports.VcsProviderBitbucket, got.Provider)
+
+	require.NoError(t, s.Repos.EnsureExists(testCtx, bb))
+	got, _, _ = s.Repos.Get(testCtx, bb.RepoId)
+	assert.Equal(t, ports.VcsProviderBitbucket, got.Provider, "provider must not regress to github on re-upsert")
+
+	// ListByTenant returns the provider too.
+	list, err := s.Repos.ListByTenant(testCtx, "tenant-a")
+	require.NoError(t, err)
+	byId := make(map[ports.RepoId]ports.VcsProvider, len(list))
+	for _, r := range list {
+		byId[r.RepoId] = r.Provider
+	}
+	assert.Equal(t, ports.VcsProviderGitHub, byId["legacy/repo"])
+	assert.Equal(t, ports.VcsProviderBitbucket, byId["bbteam/svc"])
+}
+
 func TestPrRunStore_Begin_HonorsIdempotencyKey(t *testing.T) {
 	s := requireDB(t)
 	require.NoError(t, s.Repos.EnsureExists(testCtx, ports.RepoRef{
