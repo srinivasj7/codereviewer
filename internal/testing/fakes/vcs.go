@@ -249,6 +249,20 @@ func (v *Vcs) PostCommentReplies() []PostCommentReplyCall {
 	return out
 }
 
+// For implements ports.VcsRegistry — the fake serves every provider
+// lookup from itself, since tests using *fakes.Vcs are single-VCS by
+// convention. Slice-6B multi-VCS routing tests construct a real
+// MapVcsRegistry directly.
+func (v *Vcs) For(_ ports.VcsProvider) (ports.VcsSource, error) {
+	return v, nil
+}
+
+// Providers implements ports.VcsRegistry. Returns ["github"] since
+// the fake masquerades as the historical default.
+func (v *Vcs) Providers() []ports.VcsProvider {
+	return []ports.VcsProvider{ports.VcsProviderGitHub}
+}
+
 // PostCommentReply records the call and returns a synthesized id.
 func (v *Vcs) PostCommentReply(_ context.Context, repoId ports.RepoId, prNumber int, parentCommentId int64, body string) (int64, error) {
 	v.mu.Lock()

@@ -22,14 +22,16 @@ import (
 // Provider implements ports.ContextProvider for GitHub issues.
 type Provider struct {
 	client *github.Client
-	vcs    ports.VcsSource
+	vcs    ports.VcsRegistry
 	obs    ports.Obs
 }
 
 // New constructs a Provider. client is a go-github client already
 // authenticated against the GitHub App installation; in production
-// callers reuse the same client built by vcsgithub.New.
-func New(client *github.Client, vcs ports.VcsSource, obs ports.Obs) *Provider {
+// callers reuse the same client built by vcsgithub.New. The registry
+// is resolved per-ref so PRs on other VCSes can still reference public
+// GitHub issues — only the PR-meta fetch uses the ref's own adapter.
+func New(client *github.Client, vcs ports.VcsRegistry, obs ports.Obs) *Provider {
 	return &Provider{client: client, vcs: vcs, obs: obs}
 }
 
@@ -38,7 +40,13 @@ func (p *Provider) Name() string { return "github-issues" }
 
 // Fetch implements ports.ContextProvider.
 func (p *Provider) Fetch(ctx context.Context, ref ports.PrRef) ([]ports.ContextItem, error) {
-	meta, err := p.vcs.FetchPrMeta(ctx, ref)
+	vcs, err := p.vcs.For(ref.ProviderOrDefault())
+	if err != nil {
+		p.obs.Logger.Warn("github-issues: vcs registry lookup failed",
+			"provider", string(ref.ProviderOrDefault()), "err", err.Error())
+		return nil, nil
+	}
+	meta, err := vcs.FetchPrMeta(ctx, ref)
 	if err != nil {
 		p.obs.Logger.Warn("github-issues: pr meta failed", "err", err.Error())
 		return nil, nil

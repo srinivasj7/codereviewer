@@ -65,7 +65,7 @@ func (s *stopwatch) Kv() []any {
 
 // Deps holds the pipeline's collaborators. Construct via NewPipeline.
 type Deps struct {
-	Vcs              ports.VcsSource
+	Vcs              ports.VcsRegistry
 	Llm              ports.LlmGateway
 	Clock            ports.Clock
 	Obs              ports.Obs
@@ -99,6 +99,18 @@ func NewPipeline(deps Deps) *Pipeline {
 		deps.SystemPrompt = prompt.DefaultSystemPrompt
 	}
 	return &Pipeline{deps: deps}
+}
+
+// vcs resolves the VcsSource for ref.Provider via the registry. The
+// gateway is supposed to validate the provider before publishing a job,
+// so a missing registration is a programming error — panic with a
+// useful message so the stack trace points at the configuration bug.
+func (p *Pipeline) vcs(ref ports.PrRef) ports.VcsSource {
+	v, err := p.deps.Vcs.For(ref.ProviderOrDefault())
+	if err != nil {
+		panic(fmt.Sprintf("review: vcs registry missing %q: %v", ref.ProviderOrDefault(), err))
+	}
+	return v
 }
 
 // Handle is the bus consumer entry point. It MUST ack or nack the
@@ -171,9 +183,9 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	prevHead, incremental := p.findPreviousReviewedHead(ctx, ref)
 	var diff ports.UnifiedDiff
 	if incremental {
-		diff, err = p.deps.Vcs.FetchDiffBetween(ctx, ref.RepoId, prevHead, ref.HeadSha)
+		diff, err = p.vcs(ref).FetchDiffBetween(ctx, ref.RepoId, prevHead, ref.HeadSha)
 	} else {
-		diff, err = p.deps.Vcs.FetchDiff(ctx, ref)
+		diff, err = p.vcs(ref).FetchDiff(ctx, ref)
 	}
 	sw.Mark("fetch_diff")
 	if err != nil {
@@ -290,7 +302,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 		Body:     summaryBody(len(botComments), hasBlocker),
 		Comments: botComments,
 	}
-	posted, err := p.deps.Vcs.PostReview(ctx, ref, review)
+	posted, err := p.vcs(ref).PostReview(ctx, ref, review)
 	sw.Mark("post_review")
 	if err != nil {
 		return p.failOpen(ctx, ref, runId, fmt.Errorf("post review: %w", err))
@@ -325,7 +337,7 @@ func (p *Pipeline) process(ctx context.Context, job schemas.ReviewJob) error {
 	if hasBlocker {
 		conclusion = "failure"
 	}
-	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+	if err := p.vcs(ref).UpdateCheck(ctx, ref, ports.CheckResult{
 		Name:       "code-review-bot/review",
 		Conclusion: conclusion,
 		Summary:    fmt.Sprintf("%d comments posted", len(botComments)),
@@ -523,7 +535,7 @@ func (p *Pipeline) findPreviousReviewedHead(ctx context.Context, ref ports.PrRef
 func (p *Pipeline) postNoChanges(ctx context.Context, ref ports.PrRef, runId store.RunId, prevHead string) error {
 	p.deps.Obs.Logger.Info("review skipped; no diff between prior reviewed head and current",
 		"pr_number", ref.PrNumber, "prev_head", prevHead, "head_sha", ref.HeadSha)
-	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+	if err := p.vcs(ref).UpdateCheck(ctx, ref, ports.CheckResult{
 		Name:       "code-review-bot/review",
 		Conclusion: "success",
 		Summary:    "No new diff since last review",
@@ -537,12 +549,12 @@ func (p *Pipeline) postNoChanges(ctx context.Context, ref ports.PrRef, runId sto
 }
 
 func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runId store.RunId) error {
-	if _, err := p.deps.Vcs.PostReview(ctx, ref, ports.ReviewPayload{
+	if _, err := p.vcs(ref).PostReview(ctx, ref, ports.ReviewPayload{
 		Body: "Code review bot: daily budget exceeded; review skipped. The check passes by policy.",
 	}); err != nil {
 		p.deps.Obs.Logger.Warn("post neutral comment failed", "err", err.Error())
 	}
-	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+	if err := p.vcs(ref).UpdateCheck(ctx, ref, ports.CheckResult{
 		Name:       "code-review-bot/review",
 		Conclusion: "success",
 		Summary:    "Budget exceeded; review skipped",
@@ -557,12 +569,12 @@ func (p *Pipeline) postBudgetExceeded(ctx context.Context, ref ports.PrRef, runI
 
 func (p *Pipeline) failOpen(ctx context.Context, ref ports.PrRef, runId store.RunId, cause error) error {
 	p.deps.Obs.Logger.Error("review failing open", "err", cause.Error())
-	if _, err := p.deps.Vcs.PostReview(ctx, ref, ports.ReviewPayload{
+	if _, err := p.vcs(ref).PostReview(ctx, ref, ports.ReviewPayload{
 		Body: "Code review bot: an error occurred; the check passes by policy.",
 	}); err != nil {
 		p.deps.Obs.Logger.Warn("post neutral comment failed", "err", err.Error())
 	}
-	if err := p.deps.Vcs.UpdateCheck(ctx, ref, ports.CheckResult{
+	if err := p.vcs(ref).UpdateCheck(ctx, ref, ports.CheckResult{
 		Name:       "code-review-bot/review",
 		Conclusion: "success",
 		Summary:    "Review unavailable",

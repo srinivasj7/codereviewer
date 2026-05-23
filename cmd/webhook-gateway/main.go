@@ -82,7 +82,7 @@ func run(cfgPath string) error {
 		return fmt.Errorf("bus: %w", err)
 	}
 
-	vcs, err := boot.PickVcs(cfg.Vcs, secrets)
+	vcs, err := boot.PickVcsRegistry(cfg.Vcs, secrets)
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
 	}
@@ -104,12 +104,12 @@ func run(cfgPath string) error {
 	}
 	webhookLimiter := newWebhookLimiter(cfg.RateLimit.WebhookPerSecond)
 	r.Get("/health", gw.health)
-	// Both routes call the same handler, which delegates to the
-	// configured Vcs.VerifyWebhook. Only one route will validate
-	// successfully per deployment (single-VCS swap; multi-VCS
-	// routing comes in slice 6 Phase B).
-	r.With(webhookLimiter).Post("/github/webhook", gw.webhook)
-	r.With(webhookLimiter).Post("/bitbucket/webhook", gw.webhook)
+	// Each route resolves its own VcsSource from the registry. Providers
+	// not configured for this deployment return 404 at request time so
+	// stray webhooks fail loudly instead of slipping into the wrong
+	// adapter's VerifyWebhook.
+	r.With(webhookLimiter).Post("/github/webhook", gw.webhookHandler(ports.VcsProviderGitHub))
+	r.With(webhookLimiter).Post("/bitbucket/webhook", gw.webhookHandler(ports.VcsProviderBitbucket))
 
 	srv := &http.Server{
 		Addr:              cfg.Gateway.ListenAddr,
@@ -213,7 +213,7 @@ func webhookClientIP(r *http.Request) string {
 }
 
 type gateway struct {
-	vcs       ports.VcsSource
+	vcs       ports.VcsRegistry
 	bus       ports.MessageBus
 	repos     store.RepoStore
 	contextDB store.ContextStore
@@ -230,53 +230,68 @@ func (g *gateway) health(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, "ok\n")
 }
 
-func (g *gateway) webhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
-		return
-	}
-	event, err := g.vcs.VerifyWebhook(r.Context(), r.Header, body)
-	if err != nil {
-		g.obs.Logger.Warn("webhook rejected",
-			"err", err.Error(),
-			"delivery", r.Header.Get("X-GitHub-Delivery"),
-			"event", r.Header.Get("X-GitHub-Event"),
-		)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if err := g.route(r.Context(), event); err != nil {
-		g.obs.Logger.Error("route webhook failed",
-			"err", err.Error(),
+// webhookHandler builds an http.HandlerFunc bound to a specific VCS
+// provider. The handler resolves the matching VcsSource from the
+// registry at request time so a deployment running only one adapter
+// returns 404 for routes whose provider isn't configured.
+func (g *gateway) webhookHandler(provider ports.VcsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vcs, err := g.vcs.For(provider)
+		if err != nil {
+			g.obs.Logger.Warn("webhook for unconfigured provider", "provider", string(provider))
+			http.Error(w, "provider not configured", http.StatusNotFound)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		event, err := vcs.VerifyWebhook(r.Context(), r.Header, body)
+		if err != nil {
+			g.obs.Logger.Warn("webhook rejected",
+				"err", err.Error(),
+				"provider", string(provider),
+				"delivery", r.Header.Get("X-GitHub-Delivery"),
+				"event", r.Header.Get("X-GitHub-Event"),
+			)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := g.route(r.Context(), provider, event); err != nil {
+			g.obs.Logger.Error("route webhook failed",
+				"err", err.Error(),
+				"provider", string(provider),
+				"kind", string(event.Kind),
+				"delivery", event.DeliveryId,
+			)
+			http.Error(w, "route", http.StatusInternalServerError)
+			return
+		}
+		g.obs.Logger.Info("webhook accepted",
+			"provider", string(provider),
 			"kind", string(event.Kind),
 			"delivery", event.DeliveryId,
 		)
-		http.Error(w, "route", http.StatusInternalServerError)
-		return
+		w.WriteHeader(http.StatusAccepted)
 	}
-	g.obs.Logger.Info("webhook accepted",
-		"kind", string(event.Kind),
-		"delivery", event.DeliveryId,
-	)
-	w.WriteHeader(http.StatusAccepted)
 }
 
-func (g *gateway) route(ctx context.Context, event ports.WebhookEvent) error {
+func (g *gateway) route(ctx context.Context, provider ports.VcsProvider, event ports.WebhookEvent) error {
 	switch event.Kind {
 	case ports.WebhookKindPullRequest:
-		return g.routePullRequest(ctx, event.PullRequest)
+		return g.routePullRequest(ctx, provider, event.PullRequest)
 	case ports.WebhookKindPush:
-		return g.routePush(ctx, event.Push)
+		return g.routePush(ctx, provider, event.Push)
 	case ports.WebhookKindReviewComment:
-		return g.routeReviewComment(ctx, event.ReviewComment)
+		return g.routeReviewComment(ctx, provider, event.ReviewComment)
 	case ports.WebhookKindReaction:
-		return g.routeReaction(ctx, event.Reaction)
+		return g.routeReaction(ctx, provider, event.Reaction)
 	}
 	return nil
 }
 
-func (g *gateway) routePullRequest(ctx context.Context, p *ports.PullRequestPayload) error {
+func (g *gateway) routePullRequest(ctx context.Context, provider ports.VcsProvider, p *ports.PullRequestPayload) error {
 	if p == nil {
 		return nil
 	}
@@ -291,19 +306,21 @@ func (g *gateway) routePullRequest(ctx context.Context, p *ports.PullRequestPayl
 
 	repo := p.Repo
 	repo.TenantId = g.tenantId
+	repo.Provider = provider
 	if err := g.ensureRepo(ctx, repo); err != nil {
 		return err
 	}
 
 	ref := p.Ref
 	ref.TenantId = g.tenantId
+	ref.Provider = provider
 	return schemas.PublishReviewJob(ctx, g.bus, schemas.ReviewJob{
 		PrRef:   ref,
 		Trigger: triggerFor(p.Action),
 	})
 }
 
-func (g *gateway) routePush(ctx context.Context, p *ports.PushPayload) error {
+func (g *gateway) routePush(ctx context.Context, provider ports.VcsProvider, p *ports.PushPayload) error {
 	if p == nil {
 		return nil
 	}
@@ -314,6 +331,7 @@ func (g *gateway) routePush(ctx context.Context, p *ports.PushPayload) error {
 
 	repo := p.Repo
 	repo.TenantId = g.tenantId
+	repo.Provider = provider
 	if err := g.ensureRepo(ctx, repo); err != nil {
 		return err
 	}
@@ -321,13 +339,14 @@ func (g *gateway) routePush(ctx context.Context, p *ports.PushPayload) error {
 	return schemas.PublishIndexJob(ctx, g.bus, schemas.IndexJob{
 		TenantId:  g.tenantId,
 		RepoId:    p.Repo.RepoId,
+		Provider:  provider,
 		Ref:       p.Ref,
 		BeforeSha: p.BeforeSha,
 		HeadSha:   p.HeadSha,
 	})
 }
 
-func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewCommentPayload) error {
+func (g *gateway) routeReviewComment(ctx context.Context, provider ports.VcsProvider, p *ports.ReviewCommentPayload) error {
 	if p == nil || p.IsBot {
 		return nil
 	}
@@ -338,6 +357,7 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 		_ = rest // slice 2 ignores args
 		ref := p.Ref
 		ref.TenantId = g.tenantId
+		ref.Provider = provider
 		return schemas.PublishReviewJob(ctx, g.bus, schemas.ReviewJob{
 			PrRef:   ref,
 			Trigger: ports.TriggerSlashCommand,
@@ -358,6 +378,7 @@ func (g *gateway) routeReviewComment(ctx context.Context, p *ports.ReviewComment
 		return schemas.PublishFeedbackJob(ctx, g.bus, schemas.FeedbackJob{
 			TenantId:          g.tenantId,
 			RepoId:            p.Ref.RepoId,
+			Provider:          provider,
 			Kind:              "reply",
 			CommentExternalId: p.InReplyToId,
 			AuthorId:          p.AuthorId,
@@ -397,13 +418,14 @@ func (g *gateway) handleContextCommand(ctx context.Context, p *ports.ReviewComme
 	})
 }
 
-func (g *gateway) routeReaction(ctx context.Context, p *ports.ReactionPayload) error {
+func (g *gateway) routeReaction(ctx context.Context, provider ports.VcsProvider, p *ports.ReactionPayload) error {
 	if p == nil || p.CommentExternalId == 0 {
 		return nil
 	}
 	return schemas.PublishFeedbackJob(ctx, g.bus, schemas.FeedbackJob{
 		TenantId:          g.tenantId,
 		RepoId:            "", // unknown at reaction event time; worker uses CommentExternalId
+		Provider:          provider,
 		Kind:              "reaction",
 		CommentExternalId: p.CommentExternalId,
 		Reaction:          p.Reaction,

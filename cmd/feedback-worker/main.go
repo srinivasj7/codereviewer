@@ -85,7 +85,7 @@ func run(cfgPath string) error {
 		if err != nil {
 			return fmt.Errorf("secrets: %w", err)
 		}
-		vcs, err := boot.PickVcs(cfg.Vcs, secrets)
+		vcs, err := boot.PickVcsRegistry(cfg.Vcs, secrets)
 		if err != nil {
 			return fmt.Errorf("vcs: %w", err)
 		}

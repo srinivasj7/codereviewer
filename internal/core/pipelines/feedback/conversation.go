@@ -12,7 +12,7 @@ import (
 // conversationDeps is the subset of Deps the conversation sub-handler
 // uses. Kept private so callers wire via the main Deps struct.
 type conversationDeps struct {
-	Vcs      ports.VcsSource
+	Vcs      ports.VcsRegistry
 	Llm      ports.LlmGateway
 	Comments store.CommentStore
 	CostCaps store.CostCapStore
@@ -112,7 +112,13 @@ func (p *Pipeline) maybeReply(ctx context.Context, parent store.Comment, job sch
 			"comment_id", string(parent.CommentId))
 		return
 	}
-	newId, err := p.conv.Vcs.PostCommentReply(ctx, parent.RepoId, job.PrNumber, parentExternalId, reply)
+	vcs, err := p.conv.Vcs.For(job.Provider)
+	if err != nil {
+		p.conv.Obs.Logger.Warn("conversation: vcs registry lookup failed",
+			"provider", string(job.Provider), "err", err.Error())
+		return
+	}
+	newId, err := vcs.PostCommentReply(ctx, parent.RepoId, job.PrNumber, parentExternalId, reply)
 	if err != nil {
 		p.conv.Obs.Logger.Warn("conversation: post reply failed", "err", err.Error())
 		return
@@ -196,7 +202,7 @@ func buildConversationUserPrompt(originalComment, reply string) string {
 // post-construction setter so the existing Deps struct stays stable
 // for callers that don't need conversation mode (e.g. the smoke
 // harness, the in-memory feedback tests).
-func (p *Pipeline) SetConversationDeps(vcs ports.VcsSource, llm ports.LlmGateway, costCaps store.CostCapStore, conf func() schemas.ConversationConfig) {
+func (p *Pipeline) SetConversationDeps(vcs ports.VcsRegistry, llm ports.LlmGateway, costCaps store.CostCapStore, conf func() schemas.ConversationConfig) {
 	p.conv.Vcs = vcs
 	p.conv.Llm = llm
 	p.conv.CostCaps = costCaps
